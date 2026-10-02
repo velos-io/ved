@@ -1,0 +1,195 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  quality:
+    uses: ./.github/workflows/quality.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: quality
+    timeout-minutes: 30
+    name: Build - ${{ matrix.platform.name }}
+    runs-on: ${{ matrix.platform.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - name: macOS ARM64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            archive_name: ved-darwin-arm64
+          - name: macOS Intel
+            os: macos-latest
+            target: x86_64-apple-darwin
+            archive_name: ved-darwin-amd64
+          - name: Linux AMD64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_name: ved-linux-amd64
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            archive_name: ved-linux-arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88.0'
+          targets: ${{ matrix.platform.target }}
+
+      - name: Build release binary
+        run: |
+          cargo build --locked --release --target ${{ matrix.platform.target }} --bin ved
+
+      - name: Set up archive validation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Package archive
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.platform.target }}/release/ved dist/ved
+          chmod +x dist/ved
+          COPYFILE_DISABLE=1 tar -czvf ${{ matrix.platform.archive_name }}.tar.gz -C dist ved
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${{ matrix.platform.archive_name }}.tar.gz" > "${{ matrix.platform.archive_name }}.tar.gz.sha256"
+          else
+            shasum -a 256 "${{ matrix.platform.archive_name }}.tar.gz" > "${{ matrix.platform.archive_name }}.tar.gz.sha256"
+          fi
+
+      - name: Validate release archive before upload
+        env:
+          RELEASE_TARGET: ${{ matrix.platform.target }}
+          RELEASE_ARCHIVE: ${{ matrix.platform.archive_name }}.tar.gz
+        run: |
+          python3 - <<'PY'
+          import os, platform, subprocess
+          target_arch = os.environ['RELEASE_TARGET'].split('-')[0]
+          host_arch = {'arm64': 'aarch64', 'AMD64': 'x86_64'}.get(platform.machine(), platform.machine())
+          command = ['python3', 'scripts/release-validation.py', '--archive', os.environ['RELEASE_ARCHIVE'], '--report-dir', 'target/archive-validation']
+          if target_arch != host_arch:
+              command.append('--content-only')
+          subprocess.run(command, check=True, timeout=120)
+          PY
+
+      - name: Retain archive validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ matrix.platform.archive_name }}
+          path: target/archive-validation/
+          if-no-files-found: error
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform.archive_name }}
+          path: |
+            *.tar.gz
+            *.tar.gz.sha256
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Aggregate checksums
+        run: |
+          mkdir -p release_assets
+          find artifacts -name "*.tar.gz" -exec cp {} release_assets/ \;
+          find artifacts -name "*.tar.gz.sha256" -exec cat {} + > release_assets/SHA256SUMS
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+
+      - name: Update Homebrew Tap Formula
+        if: ${{ secrets.TAP_GITHUB_TOKEN != '' }}
+        env:
+          TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA_ARM64_DARWIN=$(sha256sum release_assets/ved-darwin-arm64.tar.gz | awk '{print $1}')
+          SHA_AMD64_DARWIN=$(sha256sum release_assets/ved-darwin-amd64.tar.gz | awk '{print $1}')
+          SHA_ARM64_LINUX=$(sha256sum release_assets/ved-linux-arm64.tar.gz | awk '{print $1}')
+          SHA_AMD64_LINUX=$(sha256sum release_assets/ved-linux-amd64.tar.gz | awk '{print $1}')
+
+          # Publish public release assets to homebrew-tap
+          gh release create "v${VERSION}" release_assets/* --repo velos-io/homebrew-tap --title "v${VERSION}" --notes "Release v${VERSION}" || \
+          gh release upload "v${VERSION}" release_assets/* --repo velos-io/homebrew-tap --clobber
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/velos-io/homebrew-tap.git" tap_repo
+          mkdir -p tap_repo/Formula
+
+          cat <<EOF > tap_repo/Formula/ved.rb
+          class Ved < Formula
+            desc "High-performance deployment compiler and orchestrator for Ved specifications"
+            homepage "https://github.com/velos-io/ved"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/velos-io/homebrew-tap/releases/download/v#{version}/ved-darwin-arm64.tar.gz"
+                sha256 "${SHA_ARM64_DARWIN}"
+              else
+                url "https://github.com/velos-io/homebrew-tap/releases/download/v#{version}/ved-darwin-amd64.tar.gz"
+                sha256 "${SHA_AMD64_DARWIN}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/velos-io/homebrew-tap/releases/download/v#{version}/ved-linux-arm64.tar.gz"
+                sha256 "${SHA_ARM64_LINUX}"
+              else
+                url "https://github.com/velos-io/homebrew-tap/releases/download/v#{version}/ved-linux-amd64.tar.gz"
+                sha256 "${SHA_AMD64_LINUX}"
+              end
+            end
+
+            def install
+              bin.install "ved"
+            end
+
+            test do
+              assert_match version.to_s, shell_output("#{bin}/ved --version")
+            end
+          end
+          EOF
+
+          cd tap_repo
+          git add Formula/ved.rb
+          git commit -m "chore(formula): release ved v${VERSION}" || true
+          git push origin main || true

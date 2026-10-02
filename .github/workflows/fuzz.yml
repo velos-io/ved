@@ -1,0 +1,47 @@
+name: Instrumented Fuzz Campaign
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly on Monday at 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: 'Maximum time per target in seconds'
+        required: false
+        default: '60'
+
+permissions:
+  contents: read
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install nightly Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+          components: rust-src
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --version 0.12.0 --locked
+
+      - name: Run instrumented fuzz campaign
+        env:
+          FUZZ_MAX_TOTAL_TIME: ${{ github.event.inputs.max_total_time || '60' }}
+          FUZZ_TIMEOUT: 5
+          FUZZ_MAX_LEN: 1048576
+          FUZZ_RSS_LIMIT_MB: 2048
+          VED_FUZZ_ARTIFACT_DIR: target/fuzz-campaign-artifacts
+        run: bash scripts/run-fuzz-campaign.sh
+
+      - name: Retain campaign and crash artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-campaign-artifacts
+          path: target/fuzz-campaign-artifacts/
+          if-no-files-found: ignore

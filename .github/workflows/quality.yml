@@ -1,0 +1,108 @@
+name: Rust quality
+on:
+  pull_request:
+  push:
+    branches: ['**']
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88.0'
+          components: rustfmt, clippy
+      - run: bash scripts/rust-quality.sh
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python3 scripts/check-advisory-exceptions.py
+      - run: python3 -m unittest discover -s tests -p test_advisory_exceptions.py
+      - run: cargo deny --locked check
+      - run: cargo deny --manifest-path fuzz/Cargo.toml --locked --config deny.toml check
+  compatibility:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: cargo +stable test --workspace --locked
+      - name: Verify packaged crates and retain diagnostics
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p target/package-validation
+          cargo +stable --version > target/package-validation/build-tools.txt
+          python3 --version >> target/package-validation/build-tools.txt
+          bash scripts/package-check.sh 2>&1 | tee target/package-validation/package-check.log
+      - name: Retain packaged source smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-validation-${{ matrix.os }}
+          path: target/package-validation/
+          if-no-files-found: error
+  release-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Test validation failure gates
+        run: |
+          python3 -m unittest discover -s tests -p test_release_validation.py
+          python3 -m unittest discover -s tests -p test_validation_tools.py
+      - name: Install integrity-checked validation tools
+        run: python3 scripts/install-validation-tools.py --destination "$RUNNER_TEMP/validation-tools" --report-dir target/release-evidence/tools
+      - name: Build CLI
+        run: cargo build --locked --bin ved
+      - name: Validate generated Compose and Kustomize artifacts offline
+        run: python3 scripts/release-validation.py --ved target/debug/ved --compose "$RUNNER_TEMP/validation-tools/docker-compose" --kubectl "$RUNNER_TEMP/validation-tools/kubectl" --report-dir target/release-evidence/offline
+      - name: Validate empty and multi-group Kustomize fixtures
+        shell: bash
+        run: |
+          set -o pipefail
+          export PATH="$RUNNER_TEMP/validation-tools:$PATH"
+          export KUBECONFIG="$RUNNER_TEMP/no-cluster-kubeconfig"
+          cargo test --locked -p ved-core --test test_k8s_serialization complete_generated_trees_build_with_real_kustomize -- --ignored --exact 2>&1 | tee target/release-evidence/kustomize-regression.log
+      - name: Smoke test extracted native archive
+        run: |
+          mkdir -p target/release-evidence
+          COPYFILE_DISABLE=1 tar -czf "$RUNNER_TEMP/ved-native.tar.gz" -C target/debug ved
+          python3 scripts/release-validation.py --archive "$RUNNER_TEMP/ved-native.tar.gz" --report-dir target/release-evidence/archive
+      - name: Retain offline integration evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-integration-evidence
+          path: target/release-evidence/
+          if-no-files-found: error
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88.0'
+      # Finite runtime smoke only; sanitizer campaigns are documented separately.
+      - run: |
+          for target in parsers paths manifest_roundtrip; do
+            cargo run --locked --manifest-path fuzz/Cargo.toml --bin "$target" -- "fuzz/seeds/$target" -runs=100 -max_len=512 -timeout=5
+          done
