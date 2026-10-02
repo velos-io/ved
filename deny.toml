@@ -1,0 +1,34 @@
+[graph]
+all-features = true
+
+[advisories]
+version = 2
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+unused-ignored-advisory = "deny"
+# Reviewed maintenance-only exceptions for the locked Starlark 0.14.2 graph.
+# No patched upstream versions exist. See docs/rust-quality.md for the decision
+# and removal criteria. The guard expires these exceptions on 2027-01-09 UTC. New advisory IDs remain blocking, including security IDs
+# affecting these same crates. Remove an exception when its dependency disappears.
+ignore = [
+    { id = "RUSTSEC-2023-0089", reason = "atomic-polyfill 1.0.3 is pulled by heapless 0.7.17 through postcard/pagable/Starlark 0.14.2; upstream has no patched release. Owner: repository-maintainers. Review: 2027-01-09 UTC. Removal: upstream Starlark upgrade." },
+    { id = "RUSTSEC-2024-0388", reason = "derivative 2.2.0 is required by Starlark/starlark_syntax 0.14.2; upstream has no patched release. Owner: repository-maintainers. Review: 2027-01-09 UTC. Removal: upstream Starlark upgrade." },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash 0.2.1 is required by starlark_map 0.14.2; upstream has no patched release. Owner: repository-maintainers. Review: 2027-01-09 UTC. Removal: upstream Starlark upgrade." },
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15 is required by Starlark 0.14.2; upstream has no patched release. Owner: repository-maintainers. Review: 2027-01-09 UTC. Removal: upstream Starlark upgrade." },
+    { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml 0.2.11 is required by serde_yaml 0.9.34+deprecated; upstream is archived. Retained for 0.1.x API stability (VedError::Yaml). Owner: repository-maintainers. Review: 2027-01-09 UTC. Removal: breaking 0.2.0 release decoupled domain error." },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+allow = ["Apache-2.0", "MIT", "BSD-2-Clause", "BSD-3-Clause", "Unicode-3.0", "Zlib", "BSL-1.0", "CC0-1.0", "Unlicense", "NCSA"]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -1,0 +1,51 @@
+# vt-deployer — Python deployment compiler (Velos)
+# Generated files — never commit these
+docker-compose.yml
+**/docker-compose.yml
+installer/values.yaml
+installer/k8s/
+config/.generated.env
+**/.generated.env
+
+# Local developer overrides — never commit
+config/.local.env
+**/.local.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Editor
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+agent-work/
+
+# Rust
+target/
+.velos/
+**/.velos/
+.ved/*
+**/.ved/*
+!.ved/.ved-version
+!**/.ved/.ved-version
+
+# Review notes
+BadCode.md
+
+**/installer/k8s/
+examples/full/base/
+examples/full/overlays/
+examples/full/k8s/
+
+# Fuzz-generated corpus and crashes
+fuzz/artifacts/
+fuzz/corpus/
