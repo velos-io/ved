@@ -1,0 +1,218 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "VedfileSchema",
+  "description": "Validation schema for Ved declarative deployment specifications",
+  "type": "object",
+  "required": ["app", "version", "services"],
+  "additionalProperties": false,
+  "properties": {
+    "app": {
+      "type": "string",
+      "description": "Unique identifier of the application"
+    },
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the application deployment specification"
+    },
+    "network": {
+      "type": "string",
+      "description": "Internal bridge / overlay network name"
+    },
+    "ingress": {
+      "type": "string",
+      "description": "Base host or suffix for HTTP ingress routing"
+    },
+    "services": {
+      "type": "object",
+      "description": "Long-running daemon workloads",
+      "additionalProperties": {
+        "$ref": "#/definitions/Service"
+      }
+    },
+    "jobs": {
+      "type": "object",
+      "description": "Terminating batch, lifecycle hook, and cron workloads",
+      "additionalProperties": {
+        "$ref": "#/definitions/Job"
+      }
+    },
+    "profiles": {
+      "type": "object",
+      "description": "Conditional workload profiles",
+      "additionalProperties": {
+        "$ref": "#/definitions/Profile"
+      }
+    },
+    "env_files": {
+      "type": "array",
+      "description": "Ordered cascade of environment files to evaluate and mount",
+      "items": {
+        "type": "string"
+      }
+    },
+    "tasks": {
+      "type": "object",
+      "description": "Named operational tasks and health commands",
+      "additionalProperties": {
+        "type": "string"
+      }
+    }
+  },
+  "definitions": {
+    "Security": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "caps": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "escalate": {
+          "type": "boolean"
+        },
+        "user": {
+          "type": ["string", "integer"]
+        },
+        "fsGroup": {
+          "type": "integer"
+        },
+        "dropAll": {
+          "type": "boolean"
+        }
+      }
+    },
+    "Service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "image": {
+          "type": "string"
+        },
+        "build": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "ports": {
+          "type": "array",
+          "items": {
+            "type": ["string", "integer"]
+          }
+        },
+        "memory": {
+          "type": "string",
+          "pattern": "^[0-9]+[A-Za-z]+$"
+        },
+        "ingress": {
+          "type": "string"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean"]
+          }
+        },
+        "env_file": {
+          "type": "string"
+        },
+        "mounts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "security": {
+          "$ref": "#/definitions/Security"
+        },
+        "health": {
+          "type": ["string", "object"]
+        },
+        "waitFor": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "restart": {
+          "type": "string",
+          "enum": ["always", "unless-stopped", "on-failure", "no"]
+        },
+        "enabled": {
+          "type": ["boolean", "string"]
+        }
+      }
+    },
+    "Job": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "type": "string"
+        },
+        "group": {
+          "type": "string"
+        },
+        "command": {
+          "type": ["string", "array"],
+          "items": { "type": "string" }
+        },
+        "schedule": {
+          "type": "string"
+        },
+        "hook": {
+          "type": "string",
+          "enum": ["pre-install", "post-install", "pre-upgrade", "post-upgrade", "pre-delete", "post-delete"]
+        },
+        "mounts": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "number", "boolean"]
+          }
+        },
+        "waitFor": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "restart": {
+          "type": "string",
+          "enum": ["never", "on-failure"]
+        },
+        "when": {
+          "type": ["string", "boolean"]
+        },
+        "enabled": {
+          "type": ["boolean", "string"]
+        }
+      }
+    },
+    "Profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["when"],
+      "properties": {
+        "when": {
+          "type": ["string", "boolean"]
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Service"
+          }
+        },
+        "jobs": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/definitions/Job"
+          }
+        }
+      }
+    }
+  }
+}
