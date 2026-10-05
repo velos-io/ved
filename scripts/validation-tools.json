@@ -1,0 +1,5 @@
+{
+  "compose": "5.3.1",
+  "kubectl": "1.36.1",
+  "kustomize": "5.8.1"
+}
