@@ -1,0 +1,21 @@
+[package]
+name = "ved-process"
+version = "0.1.0"
+edition = "2021"
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Synchronous bounded subprocess execution for Ved"
+
+[dependencies]
+thiserror = "2.0.21"
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1.1.5", features = ["process"] }
+
+[[bin]]
+name = "process-fixture"
+path = "src/bin/process_fixture.rs"
+
+[lints]
+workspace = true
