@@ -1,0 +1,22 @@
+[workspace]
+members = [
+    "crates/ved-process",
+    "crates/ved-core",
+    "crates/ved",
+]
+resolver = "2"
+exclude = ["fuzz"]
+
+[workspace.package]
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/velos-io/ved"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
