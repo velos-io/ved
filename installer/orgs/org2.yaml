@@ -1,0 +1,17 @@
+# installer/orgs/org2.yaml — ORG2 cluster (Jfrog registries, ACR image push)
+
+registries:
+  ubi:      org2.azurecr.io/org2/baseimages
+  internal: org2.azurecr.io/org2/
+  external: org2.azurecr.io/external
+  npm:      https://org2.jfrog.io/artifactory/api/npm/npm-mirror
+  pip:      https://org2.jfrog.io/artifactory/api/pypi/py/simple
+
+images:
+  special_lib_version: ""
+
+kubernetes:
+  ingress_suffix: local.org2
+  image_registry: team.azurecr.io
+  image_prefix:   domain1-
+  pull_secret:    registries-auth

@@ -1,0 +1,85 @@
+#!/bin/sh
+set -e
+
+# Resolve repository root
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# 1. If a local workspace release build exists, prefer it for local repo development
+LOCAL_BIN="$SCRIPT_DIR/target/release/ved"
+if [ -f "$LOCAL_BIN" ] && [ -x "$LOCAL_BIN" ]; then
+    exec "$LOCAL_BIN" "$@"
+fi
+
+# 2. Check system PATH for an existing ved installation (e.g. via brew)
+if command -v ved >/dev/null 2>&1; then
+    exec ved "$@"
+fi
+
+# 3. Check cached standalone binary
+VED_HOME="${VED_HOME:-$HOME/.ved}"
+CACHED_BIN="$VED_HOME/bin/ved"
+if [ -f "$CACHED_BIN" ] && [ -x "$CACHED_BIN" ]; then
+    exec "$CACHED_BIN" "$@"
+fi
+
+# 4. Resolve desired version and GitHub repository
+VERSION="0.1.21"
+if [ -f "$SCRIPT_DIR/.ved/.ved-version" ]; then
+    VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/.ved/.ved-version")"
+elif [ -f "$SCRIPT_DIR/.ved-version" ]; then
+    VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/.ved-version")"
+fi
+VERSION="${VED_VERSION:-$VERSION}"
+VERSION="${VERSION#v}"
+
+REPO="${VED_GITHUB_REPO:-velos-io/homebrew-tap}"
+
+# Detect OS and Architecture
+OS_RAW="$(uname -s)"
+case "$OS_RAW" in
+    Darwin) OS="darwin" ;;
+    Linux)  OS="linux" ;;
+    *)      OS="$(echo "$OS_RAW" | tr '[:upper:]' '[:lower:]')" ;;
+esac
+
+ARCH_RAW="$(uname -m)"
+case "$ARCH_RAW" in
+    x86_64|amd64) ARCH="amd64" ;;
+    arm64|aarch64) ARCH="arm64" ;;
+    *) ARCH="$ARCH_RAW" ;;
+esac
+
+# 5. Attempt download from GitHub Releases
+DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/ved-${OS}-${ARCH}.tar.gz"
+
+if command -v curl >/dev/null 2>&1; then
+    echo "vew: ved binary not found; fetching v${VERSION} for ${OS}-${ARCH} from GitHub Releases..." >&2
+    TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'ved')"
+    
+    if curl -fsSL "$DOWNLOAD_URL" -o "$TMP_DIR/ved.tar.gz" 2>/dev/null; then
+        mkdir -p "$VED_HOME/bin"
+        if tar -xzf "$TMP_DIR/ved.tar.gz" -C "$TMP_DIR" 2>/dev/null; then
+            if [ -f "$TMP_DIR/ved" ]; then
+                mv "$TMP_DIR/ved" "$CACHED_BIN"
+            fi
+            chmod +x "$CACHED_BIN"
+            rm -rf "$TMP_DIR"
+            echo "vew: installed ved v${VERSION} to ${CACHED_BIN}" >&2
+            exec "$CACHED_BIN" "$@"
+        fi
+    fi
+    rm -rf "$TMP_DIR"
+fi
+
+# 6. Fallback to Cargo if compiling from local repository
+if command -v cargo >/dev/null 2>&1 && [ -f "$SCRIPT_DIR/Cargo.toml" ]; then
+    echo "vew: downloading release failed or unavailable; building ved with cargo..." >&2
+    cargo build --release --bin ved --manifest-path "$SCRIPT_DIR/Cargo.toml" >&2
+    if [ -f "$LOCAL_BIN" ]; then
+        exec "$LOCAL_BIN" "$@"
+    fi
+fi
+
+echo "vew: error: could not find or download ved binary." >&2
+echo "Please install ved via Homebrew (brew install ${REPO%/*}/tap/ved) or install Rust/Cargo." >&2
+exit 1
