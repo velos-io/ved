@@ -1,0 +1,18 @@
+# installer/orgs/my.yaml — My cluster (internal mirrors, no ACR push)
+
+registries:
+  ubi:      redhat.mirror
+  internal: hub.mirror/internal
+  external: docker.my
+  payment:  hub.mirror/internal
+  npm:      https://artifactory.my/artifactory/api/npm/npm-mirror/
+  pip:      https://artifactory.my/artifactory/api/pypi/py/simple
+
+images:
+  special_lib_version: ""
+
+kubernetes:
+  ingress_suffix: localapp.my
+  image_registry: ""             # empty -> no overlays/dev image substitution
+  image_prefix:   ""
+  pull_secret:    registries-auth
