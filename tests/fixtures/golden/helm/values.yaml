@@ -1,0 +1,186 @@
+global:
+  appVersion: 0.1.0
+  sources:
+    app_source: demo
+    ubi_registry_mirror: registry.access.redhat.com
+    internal_registry: ''
+    external_registry_mirror: ''
+    payment_registry_mirror: ''
+    k8s_registry: ''
+    k8s_image_prefix: ''
+  registries:
+    npm: ''
+    pip: ''
+  kubernetes:
+    namespace: demo-ns
+    imagePullSecret: ''
+    ingress_suffix: app.localapp
+    podSecurityEnabled: false
+    secretsGroup: infra
+    extraBaseResourcesGroup: tools
+  profiles:
+    core:
+    - postgres
+    - flyway-demo
+    otel:
+    - otel-collector
+  profileActivation:
+    core: {}
+    otel:
+      envFiles:
+      - config/.env
+      - config/.local.env
+      when:
+        OTEL_ENABLED: 'true'
+  extraBaseResources:
+  - ingress-nginx.yaml
+  images:
+    special_lib_version: ''
+services:
+  lambda-emulator: &id001
+    image: public.ecr.aws/lambda/nodejs:24
+    replicas: 1
+    memory: 512Mi
+    env:
+      DB_HOST: postgres
+      DB_PORT: '5432'
+      DB_NAME: demo
+      DB_USER: demo_app
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_RESOURCE_ATTRIBUTES: service.name=lambda-emulator
+    volumes:
+    - name: app-config
+      mountPath: /etc/app
+      readOnly: true
+      type: configMap
+    - mountPath: /etc/app/config.json
+      hostPath: ./config/app.json
+      readOnly: true
+      type: hostPath
+    ports:
+    - port: 8085
+      targetPort: 8080
+    healthcheck:
+      test:
+      - CMD
+      - node
+      - -e
+      - const s=require('net').connect(8080,'localhost',()=>{s.end();process.exit(0);});s.on('error',()=>process.exit(1));
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+  api-gateway: &id002
+    image: node:20-alpine
+    replicas: 1
+    memory: ''
+    env:
+      PORT: '8080'
+      LAMBDA_URL: http://lambda-emulator:8080/2015-03-31/functions/function/invocations
+    volumes: []
+    ports:
+    - port: 8080
+      targetPort: 8080
+    healthcheck:
+      test:
+      - CMD
+      - node
+      - -e
+      - 'require(''http'').get(''http://localhost:8080/health'', r => process.exit(r.statusCode
+        === 200 ? 0 : 1))'
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+  smoke-test: &id003
+    image: curlimages/curl:8.6.0
+    replicas: 1
+    memory: ''
+    env:
+      TARGET_URL: http://api-gateway:8080/smoke
+    volumes: []
+    ports: []
+  report-export: &id004
+    image: postgres:16
+    replicas: 1
+    memory: ''
+    env:
+      DB_HOST: postgres
+      EXPORT_DIR: /exports
+    volumes:
+    - mountPath: /exports
+      hostPath: data/exports
+      readOnly: false
+      type: hostPath
+    ports: []
+  cleanup-job: &id005
+    image: postgres:16
+    replicas: 1
+    memory: ''
+    env:
+      DB_HOST: postgres
+      RETENTION_DAYS: '30'
+    volumes: []
+    ports: []
+  postgres: &id006
+    image: postgres:16
+    replicas: 1
+    memory: ''
+    env:
+      POSTGRES_DB: demo
+      POSTGRES_USER: demo_app
+    volumes:
+    - name: postgres-data
+      mountPath: /var/lib/postgresql/data
+      readOnly: false
+      type: named
+    ports:
+    - port: 5432
+      targetPort: 5432
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - pg_isready -U demo_app -d demo
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+  flyway-demo: &id007
+    image: flyway/flyway:13.3
+    replicas: 1
+    memory: ''
+    env:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/demo
+      FLYWAY_USER: demo_app
+      FLYWAY_SCHEMAS: public
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_BASELINE_ON_MIGRATE: 'true'
+    volumes:
+    - mountPath: /flyway/sql
+      hostPath: ddl
+      readOnly: true
+      type: hostPath
+    ports: []
+  otel-collector: &id008
+    image: otel/opentelemetry-collector:0.114.0
+    replicas: 1
+    memory: ''
+    env: {}
+    volumes:
+    - mountPath: /etc/otel/config.yaml
+      hostPath: ./config/otel.yaml
+      readOnly: false
+      type: hostPath
+    ports:
+    - port: 4317
+      targetPort: 4317
+    - port: 4318
+      targetPort: 4318
+lambda-emulator: *id001
+api-gateway: *id002
+smoke-test: *id003
+report-export: *id004
+cleanup-job: *id005
+postgres: *id006
+flyway-demo: *id007
+otel-collector: *id008

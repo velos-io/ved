@@ -1,0 +1,11 @@
+namespace: ns-1
+resources:
+- ../../../base/agent
+patches:
+- path: ingress-patch.yaml
+- path: local-security-patch.yaml
+images:
+- name: demo/api-gateway
+  newName: demo/api-gateway
+- name: demo/lambda-emulator
+  newName: demo/lambda-emulator

@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: flyway-demo-env
+data:
+  FLYWAY_URL: jdbc:postgresql://postgres.infra.svc.cluster.local:5432/demo
+  FLYWAY_USER: demo_app
+  FLYWAY_SCHEMAS: public
+  FLYWAY_LOCATIONS: filesystem:/flyway/sql
+  FLYWAY_BASELINE_ON_MIGRATE: 'true'
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: flyway-demo
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: '-5'
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: flyway-demo
+    spec:
+      containers:
+      - name: flyway-demo
+        image: flyway/flyway:13.3
+        command:
+        - migrate
+        envFrom:
+        - configMapRef:
+            name: flyway-demo-env
+        - secretRef:
+            name: app-secrets
+        volumeMounts:
+        - name: hp-ddl
+          mountPath: /flyway/sql
+          readOnly: true
+      volumes:
+      - name: hp-ddl
+        hostPath:
+          path: ddl
+      securityContext:
+        runAsNonRoot: false
+      restartPolicy: Never

@@ -1,0 +1,5 @@
+namespace: infra
+resources:
+- ../../../base/infra
+patches:
+- path: local-security-patch.yaml
