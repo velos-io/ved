@@ -1,0 +1,17 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lambda-emulator
+spec:
+  template:
+    spec:
+      securityContext:
+        runAsNonRoot: false
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      containers:
+      - name: lambda-emulator
+        securityContext:
+          allowPrivilegeEscalation: true
+          readOnlyRootFilesystem: false

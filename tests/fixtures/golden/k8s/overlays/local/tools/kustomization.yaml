@@ -1,0 +1,5 @@
+namespace: tools
+resources:
+- ../../../base/tools
+patches:
+- path: local-security-patch.yaml

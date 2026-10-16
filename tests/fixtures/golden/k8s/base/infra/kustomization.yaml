@@ -1,0 +1,4 @@
+resources:
+- flyway-demo.yaml
+- postgres.yaml
+- secrets.yaml

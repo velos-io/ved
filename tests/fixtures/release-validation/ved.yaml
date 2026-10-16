@@ -1,0 +1,33 @@
+app: release-validation
+version: "0.1.0"
+network: validation-net
+ingress: validation.local
+env_files: []
+services:
+  database:
+    image: postgres:16
+    group: infra
+    port: 5432
+    env:
+      POSTGRES_DB: validation
+      POSTGRES_USER: validation
+      POSTGRES_PASSWORD: fixture-only
+    mounts: ["database-data:/var/lib/postgresql/data"]
+    health: pg_isready -U validation
+  web:
+    image: nginx:alpine
+    ports: ["8080:80"]
+    ingress: web
+    env:
+      DATABASE_HOST: database
+      VALIDATION_MODE: offline
+    health: tcp:80
+    waitFor: ["database:ready"]
+jobs:
+  cleanup:
+    image: postgres:16
+    group: infra
+    schedule: "0 2 * * *"
+    command: echo validation
+    env:
+      DATABASE_HOST: database

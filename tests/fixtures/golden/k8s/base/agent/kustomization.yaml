@@ -1,0 +1,5 @@
+resources:
+- api-gateway.yaml
+- cleanup-job.yaml
+- lambda-emulator.yaml
+- smoke-test.yaml

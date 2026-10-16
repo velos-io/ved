@@ -1,0 +1,12 @@
+namespace: demo-ns
+resources:
+- ../../base
+patches:
+- path: secrets-patch.yaml
+images:
+- name: demo/api-gateway
+  newName: demo/api-gateway
+  newTag: <REPLACEMENT_APP_VERSION>
+- name: demo/lambda-emulator
+  newName: demo/lambda-emulator
+  newTag: <REPLACEMENT_APP_VERSION>
