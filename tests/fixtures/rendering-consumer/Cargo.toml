@@ -1,0 +1,13 @@
+[package]
+name = "rendering-consumer"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+host = ["ved-core/host"]
+
+[dependencies]
+ved-core = { path = "../../../crates/ved-core", default-features = false }
