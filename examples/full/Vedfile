@@ -1,0 +1,123 @@
+"""Vedfile — minimalist two-primitive model: Service and Job."""
+
+from ved import App, Health, Ingress, Job, Mount, Port, Security, Service, env
+
+app = App(
+    name="vt-deployer",
+    version="0.1.0",
+    network="demo-net",
+    ingress_suffix="app.localapp",
+    env_files=["config/.env", "config/.local.env"],
+)
+
+# ── Services (Long-running containers) ────────────────────────────────────────
+
+app.services.add(
+    Service(
+        name="postgres",
+        image="postgres:16",
+        group="infra",
+        ports=[Port(5432)],
+        env={
+            "POSTGRES_DB": "demo",
+            "POSTGRES_USER": "demo_app",
+            "POSTGRES_PASSWORD": env.secret("DB_PASSWORD", default="postgres"),
+        },
+        mounts=[Mount.volume("postgres-data", "/var/lib/postgresql/data")],
+        security=Security(capabilities=["CHOWN", "SETUID", "SETGID"], allow_escalation=True),
+        health=Health.exec("pg_isready -U demo_app -d demo"),
+    ),
+    Service(
+        name="redis",
+        image="redis:7-alpine",
+        group="infra",
+        ports=[Port(6379)],
+        health=Health.exec("redis-cli ping"),
+        restart="unless-stopped",
+        enabled=env.bool("REDIS_ENABLED"),
+    ),
+    Service(
+        name="lambda-emulator",
+        image="public.ecr.aws/lambda/nodejs:24",
+        build="./lambda-emulator",
+        ports=[Port(container=8080, host=8085)],
+        memory="512Mi",
+        mounts=[Mount.ro("./config/app.json", "/etc/app/config.json")],
+        security=Security(user=1000, group=1000, fs_group=1000),
+        health=Health.tcp(8080),
+        wait_for=["flyway-demo.success", "postgres:5432"],
+        env={"DB_HOST": "postgres"},
+    ),
+    Service(
+        name="api-gateway",
+        build="./api-gateway",
+        ports=[Port(8080)],
+        ingress=Ingress(host="app", path="/"),
+        health=Health.http(path="/health", port=8080),
+        wait_for=["lambda-emulator.healthy", "redis.healthy"],
+        env={"LAMBDA_URL": "http://lambda-emulator:8080/2015-03-31/functions/function/invocations"},
+    ),
+)
+
+# ── Jobs (Terminating batch, hooks, and crons) ────────────────────────────────
+
+app.jobs.add(
+    Job(
+        name="flyway-demo",
+        image="flyway/flyway:13.3",
+        group="infra",
+        command=["migrate"],
+        env={
+            "FLYWAY_URL": "jdbc:postgresql://postgres:5432/demo",
+            "FLYWAY_USER": "demo_app",
+            "FLYWAY_PASSWORD": env.secret("DB_PASSWORD", default="postgres"),
+            "FLYWAY_SCHEMAS": "public",
+            "FLYWAY_LOCATIONS": "filesystem:/flyway/sql",
+            "FLYWAY_BASELINE_ON_MIGRATE": "true",
+        },
+        mounts=[Mount.ro("./ddl", "/flyway/sql")],
+        wait_for=["postgres.healthy"],
+    ),
+    Job(
+        name="smoke-test",
+        image="curlimages/curl:8.6.0",
+        command=["curl", "-f", "http://api-gateway:8080/smoke"],
+        hook="post-install",
+    ),
+    Job(
+        name="cleanup-job",
+        image="postgres:16",
+        schedule="0 2 * * *",
+        command=["VACUUM ANALYZE;"],
+    ),
+    Job(
+        name="report-export",
+        image="postgres:16",
+        mounts=[Mount.bind("./data/exports", "/exports")],
+        enabled=env.bool("ENABLE_REPORT_EXPORT"),
+    ),
+)
+
+# ── Profiles ──────────────────────────────────────────────────────────────────
+
+with app.profile("otel", enabled=env.bool("OTEL_ENABLED")):
+    app.services.add(
+        Service(
+            name="otel-collector",
+            image="otel/opentelemetry-collector:0.114.0",
+            group="tools",
+            ports=[Port(4317), Port(4318)],
+            mounts=[Mount.ro("./config/otel.yaml", "/etc/otel/config.yaml")],
+            security=Security.drop_all(),
+        )
+    )
+
+# ── Tasks ─────────────────────────────────────────────────────────────────────
+
+@app.task
+def e2e():
+    app.services["api-gateway"].curl("/health")
+
+@app.task
+def smoke():
+    app.services["api-gateway"].curl("/smoke")

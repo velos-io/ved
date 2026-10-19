@@ -1,0 +1,115 @@
+# ved.yaml — declarative, concise workload specification
+app: vt-deployer
+version: 0.1.0
+network: demo-net
+ingress: app.localapp
+env_files:
+  - config/.env
+  - config/.local.env
+
+# ── Services (Long-running containers) ────────────────────────────────────────
+services:
+  postgres:
+    image: postgres:16
+    group: infra
+    port: 5432
+    env:
+      POSTGRES_DB: demo
+      POSTGRES_USER: demo_app
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+    mounts:
+      - postgres-data:/var/lib/postgresql/data
+    security:
+      caps: [CHOWN, SETUID, SETGID]
+      escalate: true
+    health: pg_isready -U demo_app -d demo
+
+  redis:
+    image: redis:7-alpine
+    group: infra
+    port: 6379
+    health: redis-cli ping
+    restart: unless-stopped
+    enabled: ${REDIS_ENABLED:-true}
+
+  lambda-emulator:
+    image: public.ecr.aws/lambda/nodejs:24
+    build: ./lambda-emulator
+    ports: ["8085:8080"]
+    memory: 512Mi
+    mounts:
+      - ./config/app.json:/etc/app/config.json:ro
+    security:
+      user: 1000:1000
+      fsGroup: 1000
+    health: tcp:8080
+    waitFor:
+      - flyway-demo:success
+      - postgres:ready
+    env:
+      DB_HOST: postgres
+
+  api-gateway:
+    build: ./api-gateway
+    port: 8080
+    ingress: app
+    health: http://localhost:8080/health
+    waitFor:
+      - lambda-emulator:ready
+      - redis:ready
+    env:
+      LAMBDA_URL: http://lambda-emulator:8080/2015-03-31/functions/function/invocations
+
+# ── Jobs (Terminating batch, hooks, and crons) ────────────────────────────────
+jobs:
+  flyway-demo:
+    image: flyway/flyway:13.3
+    group: infra
+    command: migrate
+    env:
+      FLYWAY_URL: jdbc:postgresql://postgres:5432/demo
+      FLYWAY_USER: demo_app
+      FLYWAY_PASSWORD: ${DB_PASSWORD:-postgres}
+      FLYWAY_SCHEMAS: public
+      FLYWAY_LOCATIONS: filesystem:/flyway/sql
+      FLYWAY_BASELINE_ON_MIGRATE: "true"
+    mounts:
+      - ./ddl:/flyway/sql:ro
+    waitFor:
+      - postgres:ready
+
+  smoke-test:
+    image: curlimages/curl:8.6.0
+    command: curl -f http://api-gateway:8080/smoke
+    hook: post-install
+
+  cleanup-job:
+    image: postgres:16
+    schedule: "0 2 * * *"
+    command: VACUUM ANALYZE;
+
+  report-export:
+    image: postgres:16
+    mounts:
+      - ./data/exports:/exports
+    restart: on-failure
+    when: ${ENABLE_REPORT_EXPORT:-false}
+
+# ── Profiles ──────────────────────────────────────────────────────────────────
+profiles:
+  otel:
+    when: ${OTEL_ENABLED:-false}
+    services:
+      otel-collector:
+        image: otel/opentelemetry-collector:0.114.0
+        group: tools
+        ports: [4317, 4318]
+        mounts:
+          - ./config/otel.yaml:/etc/otel/config.yaml
+        security:
+          dropAll: true
+
+# ── Tasks (Makefile / Gradle model) ───────────────────────────────────────────
+tasks:
+  e2e: curl -f http://localhost:8080/health
+  smoke: curl -f http://api-gateway:8080/smoke

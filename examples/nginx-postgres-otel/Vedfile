@@ -1,0 +1,41 @@
+"""Vedfile — Nginx and Postgres deployment with OpenTelemetry stack."""
+
+from ved import App, Health, Mount, Port, Service, Stack
+
+app = App(
+    name="nginx-postgres-otel",
+    version="0.1.0",
+    network="app-net",
+)
+
+# OpenTelemetry observability stack (jaeger, prometheus, otel-collector, grafana)
+Stack.add("otel")
+
+# 1. Reverse proxy / static web server
+app.services.add(
+    Service(
+        name="web",
+        image="nginx:alpine",
+        ports=[Port(80, host=8080)],
+        health=Health.http("/"),
+        wait_for=["db.healthy"],
+    )
+)
+
+# 2. Relational database
+app.services.add(
+    Service(
+        name="db",
+        image="postgres:16-alpine",
+        ports=[Port(5432, host=5432)],
+        env={
+            "POSTGRES_DB": "app_db",
+            "POSTGRES_USER": "admin",
+            "POSTGRES_PASSWORD": "secretpassword",
+        },
+        health=Health.exec("pg_isready -U admin -d app_db"),
+        mounts=[
+            Mount.volume("db-data", "/var/lib/postgresql/data"),
+        ],
+    )
+)

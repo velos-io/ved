@@ -1,0 +1,23 @@
+"""
+App nginx-postgres 0.1.0
+Network app-net
+
+# 1. Reverse proxy / static web server
+Service web nginx:alpine 8080:80
+
+# 2. Relational database
+Service db postgres:16-alpine 5432
+
+# Dependency: web waits for healthy db
+web -> db
+
+# Group assignment
+core (web, db)
+
+# Health checks
+web -- http://localhost:80/
+db -- pg_isready -U admin -d app_db
+
+# Environment variables
+db= (POSTGRES_DB=app_db, POSTGRES_USER=admin, POSTGRES_PASSWORD=secretpassword)
+"""

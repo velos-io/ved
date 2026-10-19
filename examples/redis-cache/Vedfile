@@ -1,0 +1,22 @@
+"""Vedfile — Redis Cache deployment."""
+
+from ved import App, Health, Mount, Port, Service
+
+app = App(
+    name="redis-stack",
+    version="0.1.0",
+    network="cache-net",
+)
+
+# Redis in-memory data store with persistent storage
+app.services.add(
+    Service(
+        name="cache",
+        image="redis:7-alpine",
+        ports=[Port(6379, host=6379)],
+        health=Health.tcp(6379),
+        mounts=[
+            Mount.volume("redis-data", "/data"),
+        ],
+    )
+)
