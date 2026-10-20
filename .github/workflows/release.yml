@@ -137,11 +137,14 @@ jobs:
           generate_release_notes: true
 
       - name: Update Homebrew Tap Formula
-        if: ${{ secrets.TAP_GITHUB_TOKEN != '' }}
         env:
           TAP_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
         run: |
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "TAP_GITHUB_TOKEN is not configured; skipping Homebrew tap update."
+            exit 0
+          fi
           VERSION="${GITHUB_REF_NAME#v}"
           SHA_ARM64_DARWIN=$(sha256sum release_assets/ved-darwin-arm64.tar.gz | awk '{print $1}')
           SHA_AMD64_DARWIN=$(sha256sum release_assets/ved-darwin-amd64.tar.gz | awk '{print $1}')
