@@ -10,7 +10,15 @@ permissions:
 
 jobs:
   quality:
-    uses: ./.github/workflows/quality.yml
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.88.0'
+          components: rustfmt, clippy
+      - run: bash scripts/rust-quality.sh
 
   build:
     needs: quality
