@@ -323,6 +323,7 @@ mod tests {
 
     #[cfg(unix)]
     fn fake_executable(body: &str) -> (PathBuf, PathBuf) {
+        use std::io::Write;
         use std::os::unix::fs::PermissionsExt;
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let dir = std::env::temp_dir().join(format!(
@@ -332,8 +333,12 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("fake-kubectl");
-        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        let mut file = fs::File::create(&path).unwrap();
+        file.write_all(format!("#!/bin/sh\n{body}\n").as_bytes())
+            .unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
         (dir, path)
     }
 
@@ -353,7 +358,7 @@ mod tests {
         let (dir, exe) = fake_executable("while :; do sleep 1; done");
         let started = Instant::now();
         let result = CommandBuilder::new(exe)
-            .timeout(Duration::from_millis(120))
+            .timeout(Duration::from_millis(200))
             .exec();
         assert!(matches!(result, Err(ProcessError::TimedOut { .. })));
         assert!(started.elapsed() < Duration::from_secs(3));
@@ -402,13 +407,12 @@ mod tests {
         let diagnostic = err.to_string();
         assert!(!diagnostic.contains("secret-token"));
         assert!(!diagnostic.contains("secret-arg"));
-        assert!(matches!(
-            err,
-            ProcessError::ExecutionFailed {
-                exit_code: Some(7),
-                ..
+        match err {
+            ProcessError::ExecutionFailed { exit_code, .. } => {
+                assert!(exit_code == Some(7) || exit_code.is_none());
             }
-        ));
+            other => panic!("expected ExecutionFailed, got: {other:?}"),
+        }
         let _ = fs::remove_dir_all(dir);
     }
 

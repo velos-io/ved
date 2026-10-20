@@ -347,7 +347,10 @@ impl Runner {
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     poll_interval = (poll_interval * 2).min(MAX_POLL_INTERVAL);
                 }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    thread::sleep(wait_time);
+                    poll_interval = (poll_interval * 2).min(MAX_POLL_INTERVAL);
+                }
             }
         }
 
