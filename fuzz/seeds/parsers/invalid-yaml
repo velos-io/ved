@@ -1,0 +1,5 @@
+app: sample
+services:
+  ../escape:
+    image: nginx
+    ports: ["99999"]
