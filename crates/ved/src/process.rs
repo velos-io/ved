@@ -398,8 +398,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fake_executable_diagnostics_redact_args_and_raw_stderr() {
-        let (dir, exe) = fake_executable("echo 'secret-token' >&2; exit 7");
-        let err = CommandBuilder::new(exe)
+        let err = CommandBuilder::new("sh")
+            .arg("-c")
+            .arg("echo 'secret-token' >&2; exit 7")
+            .arg("sh")
             .arg("password=secret-arg")
             .capture()
             .exec()
@@ -409,11 +411,10 @@ mod tests {
         assert!(!diagnostic.contains("secret-arg"));
         match err {
             ProcessError::ExecutionFailed { exit_code, .. } => {
-                assert!(exit_code == Some(7) || exit_code.is_none());
+                assert_eq!(exit_code, Some(7));
             }
             other => panic!("expected ExecutionFailed, got: {other:?}"),
         }
-        let _ = fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]

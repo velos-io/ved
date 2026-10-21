@@ -218,10 +218,24 @@ impl Runner {
         command.process_group(0);
         #[cfg(windows)]
         command.creation_flags(0x00000200); // CREATE_NEW_PROCESS_GROUP
-        let mut child = command.spawn().map_err(|source| RunError::Spawn {
-            executable: name.clone(),
-            source,
-        })?;
+        let mut child = {
+            let mut attempts = 0;
+            loop {
+                match command.spawn() {
+                    Ok(child) => break child,
+                    Err(source) if source.raw_os_error() == Some(26) && attempts < 10 => {
+                        attempts += 1;
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(source) => {
+                        return Err(RunError::Spawn {
+                            executable: name.clone(),
+                            source,
+                        });
+                    }
+                }
+            }
+        };
         let pid = child.id();
         let (event_tx, event_rx) = mpsc::channel();
         let (mut writer, mut writer_done) =
