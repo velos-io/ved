@@ -1,5 +1,7 @@
 use crate::error::Result;
 use crate::validated::{DependencyCondition, DependencySpec, ValidatedSpec, ValidatedWorkload};
+use indexmap::IndexMap;
+use serde::Serialize;
 use serde_yaml::{Mapping, Value};
 
 use std::collections::{BTreeSet, HashSet};
@@ -7,6 +9,61 @@ use std::collections::{BTreeSet, HashSet};
 use crate::model::{
     AppSpec, CommandSpec, HealthCheckSpec, JobSpec, MountSpec, PortSpec, ServiceSpec,
 };
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComposeFile {
+    pub name: String,
+    pub services: IndexMap<String, ComposeService>,
+    pub networks: IndexMap<String, Option<Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volumes: Option<IndexMap<String, Option<Value>>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ComposeService {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub container_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ports: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env_file: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<IndexMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volumes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healthcheck: Option<ComposeHealthcheck>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depends_on: Option<IndexMap<String, ComposeDependency>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub restart: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub build: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub networks: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profiles: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub labels: Option<IndexMap<String, String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComposeDependency {
+    pub condition: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ComposeHealthcheck {
+    pub test: Vec<String>,
+    pub interval: String,
+    pub timeout: String,
+    pub retries: u32,
+    pub start_period: String,
+}
 
 #[cfg(feature = "host")]
 pub fn generate_compose(spec: &AppSpec) -> Result<String> {
@@ -32,18 +89,13 @@ pub fn generate_compose_validated_with_context(
     let ingress_suffix = context
         .config()
         .resolve_ingress_suffix(spec.ingress.as_deref());
-    let mut root = Mapping::new();
-    root.insert(
-        Value::String("name".to_string()),
-        Value::String(spec.app.clone()),
-    );
-    let mut services = Mapping::new();
 
     let (active_workloads, healthy_workloads) = collect_active_workloads(spec);
+    let mut services = IndexMap::new();
 
     for (name, svc) in &spec.services {
         if svc.enabled.unwrap_or(true) {
-            let svc_map = build_compose_service_typed(
+            let service = build_compose_service_typed(
                 name,
                 svc,
                 spec,
@@ -55,13 +107,13 @@ pub fn generate_compose_validated_with_context(
                     .expect("validated service cache"),
                 Some(&ingress_suffix),
             );
-            services.insert(Value::String(name.clone()), Value::Mapping(svc_map));
+            services.insert(name.clone(), service);
         }
     }
 
     for (name, job) in &spec.jobs {
         if job.enabled.unwrap_or(true) {
-            let job_map = build_compose_job_typed(
+            let job_svc = build_compose_job_typed(
                 name,
                 job,
                 spec,
@@ -70,14 +122,14 @@ pub fn generate_compose_validated_with_context(
                 None,
                 validated.workload(None, name).expect("validated job cache"),
             );
-            services.insert(Value::String(name.clone()), Value::Mapping(job_map));
+            services.insert(name.clone(), job_svc);
         }
     }
 
     for (prof_name, prof) in &spec.profiles {
         for (name, svc) in &prof.services {
             if svc.enabled.unwrap_or(true) {
-                let svc_map = build_compose_service_typed(
+                let service = build_compose_service_typed(
                     name,
                     svc,
                     spec,
@@ -89,12 +141,12 @@ pub fn generate_compose_validated_with_context(
                         .expect("validated service cache"),
                     Some(&ingress_suffix),
                 );
-                services.insert(Value::String(name.clone()), Value::Mapping(svc_map));
+                services.insert(name.clone(), service);
             }
         }
         for (name, job) in &prof.jobs {
             if job.enabled.unwrap_or(true) {
-                let job_map = build_compose_job_typed(
+                let job_svc = build_compose_job_typed(
                     name,
                     job,
                     spec,
@@ -105,29 +157,29 @@ pub fn generate_compose_validated_with_context(
                         .workload(Some(prof_name), name)
                         .expect("validated job cache"),
                 );
-                services.insert(Value::String(name.clone()), Value::Mapping(job_map));
+                services.insert(name.clone(), job_svc);
             }
         }
     }
 
-    root.insert(
-        Value::String("services".to_string()),
-        Value::Mapping(services),
-    );
+    let mut networks = IndexMap::new();
+    networks.insert(spec.network.clone(), None);
 
-    root.insert(
-        Value::String("networks".to_string()),
-        Value::Mapping(build_compose_networks(&spec.network)),
-    );
+    let volumes = build_compose_volumes_validated(validated).map(|vol_map| {
+        vol_map
+            .into_iter()
+            .filter_map(|(k, _)| k.as_str().map(|s| (s.to_string(), None)))
+            .collect::<IndexMap<String, Option<Value>>>()
+    });
 
-    if let Some(volumes) = build_compose_volumes_validated(validated) {
-        root.insert(
-            Value::String("volumes".to_string()),
-            Value::Mapping(volumes),
-        );
-    }
+    let compose_file = ComposeFile {
+        name: spec.app.clone(),
+        services,
+        networks,
+        volumes,
+    };
 
-    let yaml_str = serde_yaml::to_string(&Value::Mapping(root))?;
+    let yaml_str = serde_yaml::to_string(&compose_file)?;
     Ok(yaml_str)
 }
 
@@ -192,7 +244,7 @@ pub fn build_compose_service(
     let workload = validated
         .workload(profile_name, name)
         .expect("validated workload cache");
-    Ok(build_compose_service_typed(
+    let svc = build_compose_service_typed(
         name,
         value,
         validated.as_spec(),
@@ -201,7 +253,11 @@ pub fn build_compose_service(
         profile_name,
         workload,
         None,
-    ))
+    );
+    match serde_yaml::to_value(&svc)? {
+        Value::Mapping(m) => Ok(m),
+        _ => Err(crate::error::VedError::spec_parse("", "Expected Mapping")),
+    }
 }
 
 pub fn build_compose_job(
@@ -229,7 +285,7 @@ pub fn build_compose_job(
     let workload = validated
         .workload(profile_name, name)
         .expect("validated workload cache");
-    Ok(build_compose_job_typed(
+    let job = build_compose_job_typed(
         name,
         value,
         validated.as_spec(),
@@ -237,7 +293,11 @@ pub fn build_compose_job(
         healthy_workloads,
         profile_name,
         workload,
-    ))
+    );
+    match serde_yaml::to_value(&job)? {
+        Value::Mapping(m) => Ok(m),
+        _ => Err(crate::error::VedError::spec_parse("", "Expected Mapping")),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -250,93 +310,49 @@ fn build_compose_service_typed(
     profile_name: Option<&str>,
     workload: &ValidatedWorkload,
     ingress_suffix: Option<&str>,
-) -> Mapping {
-    let mut svc_map = Mapping::new();
-
-    if let Some(img) = &svc.image {
-        svc_map.insert(
-            Value::String("image".to_string()),
-            Value::String(img.clone()),
-        );
-    }
-
-    svc_map.insert(
-        Value::String("container_name".to_string()),
-        Value::String(name.to_string()),
+) -> ComposeService {
+    let command = workload.command().and_then(|cmd| {
+        let v = format_command_value(cmd);
+        (v != Value::Null).then_some(v)
+    });
+    let ports = build_ports_value(workload.ports());
+    let env_file = build_env_file_value(&spec.env_files);
+    let environment = build_env_map(&svc.env);
+    let volumes = build_mounts_value(workload.mounts());
+    let healthcheck = build_compose_healthcheck_typed(svc, workload.ports());
+    let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
+    let restart = Some(
+        svc.restart
+            .clone()
+            .unwrap_or_else(|| "unless-stopped".to_string()),
     );
+    let build = svc.build.as_ref().map(|b| Value::Mapping(resolve_build_mapping(b)));
+    let networks = Some(vec![spec.network.clone()]);
+    let profiles = build_profiles_value(&svc.group, profile_name);
+    let labels = build_ingress_labels(svc.ingress.as_deref(), ingress_suffix);
 
-    if let Some(ports) = build_ports_value(workload.ports()) {
-        svc_map.insert(Value::String("ports".to_string()), ports);
+    ComposeService {
+        image: svc.image.clone(),
+        container_name: Some(name.to_string()),
+        ports,
+        env_file,
+        environment,
+        volumes,
+        healthcheck,
+        depends_on,
+        restart,
+        build,
+        command,
+        networks,
+        profiles,
+        labels,
     }
-
-    if let Some(env_file) = build_env_file_value(&spec.env_files) {
-        svc_map.insert(Value::String("env_file".to_string()), env_file);
-    }
-
-    if let Some(env_map) = build_env_map(&svc.env) {
-        svc_map.insert(
-            Value::String("environment".to_string()),
-            Value::Mapping(env_map),
-        );
-    }
-
-    if let Some(volumes) = build_mounts_value(workload.mounts()) {
-        svc_map.insert(Value::String("volumes".to_string()), volumes);
-    }
-
-    if let Some(hc) = build_compose_healthcheck_typed(svc, workload.ports()) {
-        svc_map.insert(Value::String("healthcheck".to_string()), Value::Mapping(hc));
-    }
-
-    if let Some(deps) =
-        build_depends_on(workload.dependencies(), active_workloads, healthy_workloads)
-    {
-        svc_map.insert(
-            Value::String("depends_on".to_string()),
-            Value::Mapping(deps),
-        );
-    }
-
-    svc_map.insert(
-        Value::String("restart".to_string()),
-        Value::String(
-            svc.restart
-                .clone()
-                .unwrap_or_else(|| "unless-stopped".to_string()),
-        ),
-    );
-
-    if let Some(b) = &svc.build {
-        svc_map.insert(
-            Value::String("build".to_string()),
-            Value::Mapping(resolve_build_mapping(b)),
-        );
-    }
-
-    if let Some(cmd) = workload.command() {
-        let cmd_val = format_command_value(cmd);
-        if cmd_val != Value::Null {
-            svc_map.insert(Value::String("command".to_string()), cmd_val);
-        }
-    }
-
-    svc_map.insert(
-        Value::String("networks".to_string()),
-        Value::Sequence(vec![Value::String(spec.network.clone())]),
-    );
-
-    if let Some(prof) = build_profiles_value(&svc.group, profile_name) {
-        svc_map.insert(Value::String("profiles".to_string()), prof);
-    }
-
-    if let Some(labels) = build_ingress_labels(svc.ingress.as_deref(), ingress_suffix) {
-        svc_map.insert(Value::String("labels".to_string()), Value::Mapping(labels));
-    }
-
-    svc_map
 }
 
-fn build_ingress_labels(ingress: Option<&str>, ingress_suffix: Option<&str>) -> Option<Mapping> {
+fn build_ingress_labels(
+    ingress: Option<&str>,
+    ingress_suffix: Option<&str>,
+) -> Option<IndexMap<String, String>> {
     let ingress = ingress?.trim();
     if ingress.is_empty() {
         return None;
@@ -345,12 +361,9 @@ fn build_ingress_labels(ingress: Option<&str>, ingress_suffix: Option<&str>) -> 
     if suffix.is_empty() {
         return None;
     }
-    Some(
-        [("ingress.host".to_string(), format!("{ingress}.{suffix}"))]
-            .into_iter()
-            .map(|(k, v)| (Value::String(k), Value::String(v)))
-            .collect(),
-    )
+    let mut labels = IndexMap::new();
+    labels.insert("ingress.host".to_string(), format!("{ingress}.{suffix}"));
+    Some(labels)
 }
 
 fn build_compose_job_typed(
@@ -361,70 +374,49 @@ fn build_compose_job_typed(
     healthy_workloads: &HashSet<String>,
     profile_name: Option<&str>,
     workload: &ValidatedWorkload,
-) -> Mapping {
-    let mut job_map = Mapping::new();
-    job_map.insert(
-        Value::String("image".to_string()),
-        Value::String(job.image.clone()),
-    );
-    job_map.insert(
-        Value::String("container_name".to_string()),
-        Value::String(name.to_string()),
-    );
+) -> ComposeService {
+    let command = workload.command().and_then(|cmd| {
+        let v = format_command_value(cmd);
+        (v != Value::Null).then_some(v)
+    });
+    let volumes = build_mounts_value(workload.mounts());
+    let env_file = build_env_file_value(&spec.env_files);
+    let environment = build_env_map(&job.env);
+    let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
+    let restart = Some("no".to_string());
+    let networks = Some(vec![spec.network.clone()]);
+    let profiles = build_profiles_value(&job.group, profile_name);
 
-    if let Some(cmd) = workload.command() {
-        let cmd_val = format_command_value(cmd);
-        if cmd_val != Value::Null {
-            job_map.insert(Value::String("command".to_string()), cmd_val);
-        }
+    ComposeService {
+        image: Some(job.image.clone()),
+        container_name: Some(name.to_string()),
+        ports: None,
+        env_file,
+        environment,
+        volumes,
+        healthcheck: None,
+        depends_on,
+        restart,
+        build: None,
+        command,
+        networks,
+        profiles,
+        labels: None,
     }
-
-    if let Some(volumes) = build_mounts_value(workload.mounts()) {
-        job_map.insert(Value::String("volumes".to_string()), volumes);
-    }
-
-    if let Some(env_file) = build_env_file_value(&spec.env_files) {
-        job_map.insert(Value::String("env_file".to_string()), env_file);
-    }
-
-    if let Some(env_map) = build_env_map(&job.env) {
-        job_map.insert(
-            Value::String("environment".to_string()),
-            Value::Mapping(env_map),
-        );
-    }
-
-    if let Some(deps) =
-        build_depends_on(workload.dependencies(), active_workloads, healthy_workloads)
-    {
-        job_map.insert(
-            Value::String("depends_on".to_string()),
-            Value::Mapping(deps),
-        );
-    }
-
-    job_map.insert(
-        Value::String("restart".to_string()),
-        Value::String("no".to_string()),
-    );
-
-    job_map.insert(
-        Value::String("networks".to_string()),
-        Value::Sequence(vec![Value::String(spec.network.clone())]),
-    );
-
-    if let Some(prof) = build_profiles_value(&job.group, profile_name) {
-        job_map.insert(Value::String("profiles".to_string()), prof);
-    }
-
-    job_map
 }
 
 pub fn build_compose_healthcheck(svc: &ServiceSpec) -> Option<Mapping> {
-    build_compose_healthcheck_typed(svc, &svc.typed_ports())
+    let hc = build_compose_healthcheck_typed(svc, &svc.typed_ports())?;
+    match serde_yaml::to_value(&hc).ok()? {
+        Value::Mapping(m) => Some(m),
+        _ => None,
+    }
 }
 
-fn build_compose_healthcheck_typed(svc: &ServiceSpec, ports: &[PortSpec]) -> Option<Mapping> {
+fn build_compose_healthcheck_typed(
+    svc: &ServiceSpec,
+    ports: &[PortSpec],
+) -> Option<ComposeHealthcheck> {
     let health_val = svc.health_value()?;
     let hc_spec = HealthCheckSpec::from_value(health_val);
 
@@ -435,7 +427,7 @@ fn build_compose_healthcheck_typed(svc: &ServiceSpec, ports: &[PortSpec]) -> Opt
         } else if let Some(arr) = test_val.as_array() {
             for item in arr {
                 if let Some(s) = item.as_str() {
-                    test_seq.push(Value::String(s.to_string()));
+                    test_seq.push(s.to_string());
                 }
             }
         }
@@ -445,28 +437,16 @@ fn build_compose_healthcheck_typed(svc: &ServiceSpec, ports: &[PortSpec]) -> Opt
         return None;
     }
 
-    let mut hc = Mapping::new();
-    hc.insert(Value::String("test".to_string()), Value::Sequence(test_seq));
-    hc.insert(
-        Value::String("interval".to_string()),
-        Value::String(hc_spec.interval),
-    );
-    hc.insert(
-        Value::String("timeout".to_string()),
-        Value::String(hc_spec.timeout),
-    );
-    hc.insert(
-        Value::String("retries".to_string()),
-        Value::Number(hc_spec.retries.into()),
-    );
-    hc.insert(
-        Value::String("start_period".to_string()),
-        Value::String(hc_spec.start_period),
-    );
-    Some(hc)
+    Some(ComposeHealthcheck {
+        test: test_seq,
+        interval: hc_spec.interval,
+        timeout: hc_spec.timeout,
+        retries: hc_spec.retries,
+        start_period: hc_spec.start_period,
+    })
 }
 
-fn build_health_test_seq(cmd: &str, ports: &[PortSpec]) -> Vec<Value> {
+fn build_health_test_seq(cmd: &str, ports: &[PortSpec]) -> Vec<String> {
     let mut test_seq = Vec::new();
     if cmd.starts_with("http://") || cmd.starts_with("https://") || cmd.starts_with('/') {
         let mut url = if cmd.starts_with('/') {
@@ -490,10 +470,10 @@ fn build_health_test_seq(cmd: &str, ports: &[PortSpec]) -> Vec<Value> {
             }
         }
 
-        test_seq.push(Value::String("CMD-SHELL".to_string()));
-        test_seq.push(Value::String(format!(
+        test_seq.push("CMD-SHELL".to_string());
+        test_seq.push(format!(
             "wget -qO- {url} > /dev/null 2>&1 || curl -fs {url} > /dev/null 2>&1 || exit 1"
-        )));
+        ));
     } else if cmd.starts_with("tcp:") {
         let mut port_str = cmd.trim_start_matches("tcp:").to_string();
         if let Ok(parsed_port) = port_str.parse::<u16>() {
@@ -505,43 +485,35 @@ fn build_health_test_seq(cmd: &str, ports: &[PortSpec]) -> Vec<Value> {
                 }
             }
         }
-        test_seq.push(Value::String("CMD-SHELL".to_string()));
-        test_seq.push(Value::String(format!(
+        test_seq.push("CMD-SHELL".to_string());
+        test_seq.push(format!(
             "nc -z localhost {port_str} || (echo > /dev/tcp/localhost/{port_str}) 2>/dev/null || exit 1"
-        )));
+        ));
     } else {
-        test_seq.push(Value::String("CMD-SHELL".to_string()));
-        test_seq.push(Value::String(cmd.to_string()));
+        test_seq.push("CMD-SHELL".to_string());
+        test_seq.push(cmd.to_string());
     }
     test_seq
 }
 
-fn build_ports_value(ports: &[PortSpec]) -> Option<Value> {
+fn build_ports_value(ports: &[PortSpec]) -> Option<Vec<String>> {
     (!ports.is_empty()).then(|| {
-        Value::Sequence(
-            ports
-                .iter()
-                .map(|port| Value::String(format!("{}:{}", port.host, port.container)))
-                .collect(),
-        )
+        ports
+            .iter()
+            .map(|port| format!("{}:{}", port.host, port.container))
+            .collect()
     })
 }
 
-fn build_env_file_value(env_files: &[String]) -> Option<Value> {
-    if env_files.is_empty() {
-        None
-    } else {
-        Some(Value::Sequence(
-            env_files.iter().map(|f| Value::String(f.clone())).collect(),
-        ))
-    }
+fn build_env_file_value(env_files: &[String]) -> Option<Vec<String>> {
+    (!env_files.is_empty()).then(|| env_files.to_vec())
 }
 
-fn build_env_map(env: &indexmap::IndexMap<String, serde_json::Value>) -> Option<Mapping> {
+fn build_env_map(env: &IndexMap<String, serde_json::Value>) -> Option<IndexMap<String, String>> {
     if env.is_empty() {
         return None;
     }
-    let mut env_map = Mapping::new();
+    let mut env_map = IndexMap::new();
     for (k, v) in env {
         let val_str = match v {
             serde_json::Value::String(s) => s.clone(),
@@ -549,30 +521,26 @@ fn build_env_map(env: &indexmap::IndexMap<String, serde_json::Value>) -> Option<
             serde_json::Value::Bool(b) => b.to_string(),
             _ => v.to_string(),
         };
-        env_map.insert(Value::String(k.clone()), Value::String(val_str));
+        env_map.insert(k.clone(), val_str);
     }
     Some(env_map)
 }
 
-fn build_mounts_value(mounts: &[MountSpec]) -> Option<Value> {
-    if mounts.is_empty() {
-        None
-    } else {
-        Some(Value::Sequence(
-            mounts
-                .iter()
-                .map(|m| Value::String(m.raw.clone()))
-                .collect(),
-        ))
-    }
+fn build_mounts_value(mounts: &[MountSpec]) -> Option<Vec<String>> {
+    (!mounts.is_empty()).then(|| {
+        mounts
+            .iter()
+            .map(|m| m.raw.clone())
+            .collect()
+    })
 }
 
 fn build_depends_on(
     wait_for: &[DependencySpec],
     active_workloads: &HashSet<String>,
     healthy_workloads: &HashSet<String>,
-) -> Option<Mapping> {
-    let mut dep_map = Mapping::new();
+) -> Option<IndexMap<String, ComposeDependency>> {
+    let mut dep_map = IndexMap::new();
     for dep in wait_for {
         let dep_name = dep.target();
         if dep.external() || !active_workloads.contains(dep_name) {
@@ -589,14 +557,11 @@ fn build_depends_on(
                 }
             }
         };
-        let mut cond_map = Mapping::new();
-        cond_map.insert(
-            Value::String("condition".to_string()),
-            Value::String(compose_cond.to_string()),
-        );
         dep_map.insert(
-            Value::String(dep_name.to_string()),
-            Value::Mapping(cond_map),
+            dep_name.to_string(),
+            ComposeDependency {
+                condition: compose_cond.to_string(),
+            },
         );
     }
     if dep_map.is_empty() {
@@ -606,21 +571,22 @@ fn build_depends_on(
     }
 }
 
-fn build_profiles_value(group: &str, profile_name: Option<&str>) -> Option<Value> {
+fn build_profiles_value(group: &str, profile_name: Option<&str>) -> Option<Vec<String>> {
     let mut prof_list = Vec::new();
     if let Some(p) = profile_name {
-        prof_list.push(Value::String(p.to_string()));
+        prof_list.push(p.to_string());
     }
     if group != "default" && group != "infra" && group != "app" && profile_name != Some(group) {
-        prof_list.push(Value::String(group.to_string()));
+        prof_list.push(group.to_string());
     }
     if prof_list.is_empty() {
         None
     } else {
-        Some(Value::Sequence(prof_list))
+        Some(prof_list)
     }
 }
 
+#[allow(dead_code)]
 pub fn build_compose_networks(network: &str) -> Mapping {
     let mut networks = Mapping::new();
     networks.insert(Value::String(network.to_string()), Value::Null);
