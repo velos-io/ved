@@ -15,10 +15,28 @@ use indexmap::IndexMap;
 /// let spec = ValidatedSpec::try_from(AppSpec::default()).unwrap();
 /// let _ = spec.wire;
 /// ```
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct WorkloadKey {
+    pub profile: Option<String>,
+    pub name: String,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+struct WorkloadQuery<'a> {
+    profile: Option<&'a str>,
+    name: &'a str,
+}
+
+impl indexmap::Equivalent<WorkloadKey> for WorkloadQuery<'_> {
+    fn equivalent(&self, key: &WorkloadKey) -> bool {
+        self.profile == key.profile.as_deref() && self.name == key.name
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ValidatedSpec {
     wire: AppSpec,
-    workloads: IndexMap<(Option<String>, String), ValidatedWorkload>,
+    workloads: IndexMap<WorkloadKey, ValidatedWorkload>,
 }
 #[derive(Debug, Clone)]
 pub struct ValidatedWorkload {
@@ -82,8 +100,7 @@ impl ValidatedSpec {
         &self.wire
     }
     pub fn workload(&self, profile: Option<&str>, name: &str) -> Option<&ValidatedWorkload> {
-        self.workloads
-            .get(&(profile.map(str::to_owned), name.to_owned()))
+        self.workloads.get(&WorkloadQuery { profile, name })
     }
 }
 #[derive(Clone)]
@@ -346,7 +363,13 @@ impl ValidatedSpec {
             names.insert(name.to_owned(), contexts.len());
             contexts.push(ctx);
             waits.push(deps.to_vec());
-            workloads.insert((profile.map(str::to_owned), name.to_owned()), parsed);
+            workloads.insert(
+                WorkloadKey {
+                    profile: profile.map(str::to_owned),
+                    name: name.to_owned(),
+                },
+                parsed,
+            );
             Ok(())
         };
         for (name, svc) in &wire.services {
@@ -450,10 +473,10 @@ impl ValidatedSpec {
                         .unwrap_or(0);
                     let mut cycle: Vec<_> = stack[begin..]
                         .iter()
-                        .filter_map(|(node, _)| workloads.get_index(*node).map(|e| e.0 .1.as_str()))
+                        .filter_map(|(node, _)| workloads.get_index(*node).map(|e| e.0.name.as_str()))
                         .collect();
                     if let Some(target_entry) = workloads.get_index(target) {
-                        cycle.push(target_entry.0 .1.as_str());
+                        cycle.push(target_entry.0.name.as_str());
                     }
                     return Err(error(
                         &contexts[node],
@@ -791,7 +814,7 @@ mod reason_tests {
 #[cfg(test)]
 mod graph_reason_tests {
     use super::*;
-    use crate::model::{JobSpec, ServiceSpec};
+    use crate::model::{JobSpec, ProfileSpec, ServiceSpec};
     #[test]
     fn duplicate_and_cycle_reasons_are_typed() {
         let mut wire = AppSpec::default();
@@ -856,5 +879,23 @@ mod graph_reason_tests {
             }
             assert!(!format!("{error} {error:?}").contains("SECRET-CONDITION"));
         }
+    }
+    #[test]
+    fn workload_query_resolves_across_default_and_custom_profiles() {
+        let mut wire = AppSpec::default();
+        wire.services.insert("web".into(), ServiceSpec::default());
+        let mut profile_spec = ProfileSpec {
+            when: serde_json::Value::Null,
+            services: IndexMap::new(),
+            jobs: IndexMap::new(),
+        };
+        profile_spec.services.insert("worker".into(), ServiceSpec::default());
+        wire.profiles.insert("prod".into(), profile_spec);
+
+        let validated = ValidatedSpec::try_from(wire).unwrap();
+        assert!(validated.workload(None, "web").is_some());
+        assert!(validated.workload(Some("prod"), "worker").is_some());
+        assert!(validated.workload(Some("dev"), "web").is_none());
+        assert!(validated.workload(None, "nonexistent").is_none());
     }
 }
