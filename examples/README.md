@@ -19,6 +19,7 @@ Ensure Cargo's bin directory is on your `PATH`. You can instead use the absolute
 |---|---|---|
 | [`full/`](full/) | Complete Microservices Stack | End-to-end stack: API gateway, Lambda emulator, Postgres, Flyway migrations, smoke tests, and OpenTelemetry |
 | [`nginx-postgres/`](nginx-postgres/) | Two-tier web + DB | Nginx web server with HTTP healthcheck and Postgres database with persistent volume |
+| [`postgres-flyway/`](postgres-flyway/) | DB + Flyway Migration + API | Automated database schema migration with Flyway running to completion before API starts |
 | [`redis-cache/`](redis-cache/) | In-memory cache | Redis 7 Alpine caching tier with TCP healthcheck and volume persistence |
 
 ## Compile an example

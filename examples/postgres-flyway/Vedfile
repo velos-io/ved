@@ -1,0 +1,58 @@
+"""Vedfile — Postgres with Flyway database migration and web API."""
+
+from ved import App, Health, Job, Mount, Port, Service
+
+app = App(
+    name="postgres-flyway",
+    version="0.1.0",
+    network="app-net",
+)
+
+# 1. Relational database
+app.services.add(
+    Service(
+        name="db",
+        image="postgres:16-alpine",
+        ports=[Port(5432, host=5432)],
+        env={
+            "POSTGRES_DB": "app_db",
+            "POSTGRES_USER": "admin",
+            "POSTGRES_PASSWORD": "secretpassword",
+        },
+        health=Health.exec("pg_isready -U admin -d app_db"),
+        mounts=[
+            Mount.volume("db-data", "/var/lib/postgresql/data"),
+        ],
+    )
+)
+
+# 2. Database migration (one-off run-to-completion job)
+app.jobs.add(
+    Job(
+        name="migration",
+        image="flyway/flyway:10-alpine",
+        command=["migrate"],
+        env={
+            "FLYWAY_URL": "jdbc:postgresql://db:5432/app_db",
+            "FLYWAY_USER": "admin",
+            "FLYWAY_PASSWORD": "secretpassword",
+            "FLYWAY_LOCATIONS": "filesystem:/flyway/sql",
+            "FLYWAY_CONNECT_RETRIES": "10",
+        },
+        mounts=[
+            Mount.ro("./sql", "/flyway/sql"),
+        ],
+        wait_for=["db.healthy"],
+    )
+)
+
+# 3. Web API service (waits for migration container to complete)
+app.services.add(
+    Service(
+        name="api",
+        image="nginx:alpine",
+        ports=[Port(80, host=8080)],
+        health=Health.http("/"),
+        wait_for=["migration.completed"],
+    )
+)
