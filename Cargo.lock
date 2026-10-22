@@ -2007,7 +2007,6 @@ dependencies = [
 name = "ved-core"
 version = "0.1.16"
 dependencies = [
- "anyhow",
  "criterion",
  "indexmap",
  "proptest",

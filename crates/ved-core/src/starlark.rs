@@ -17,12 +17,12 @@ fn ved_env_module(builder: &mut GlobalsBuilder) {
         name: &str,
         default: Option<&str>,
         eval: &mut Evaluator,
-    ) -> anyhow::Result<String> {
+    ) -> starlark::Result<String> {
         let def = default.unwrap_or("");
         let snapshot = eval
             .extra
             .and_then(|extra| extra.downcast_ref::<crate::config::ConfigSnapshot>())
-            .ok_or_else(|| anyhow::anyhow!("Configuration snapshot missing from evaluator"))?;
+            .ok_or_else(|| starlark::Error::new_other(StarlarkError::MissingConfigSnapshot))?;
         Ok(snapshot.get_prop(name, def))
     }
 }
@@ -623,4 +623,26 @@ mod budget_measurements {
         assert!(ticks > 0);
         assert!(ticks < options.budget().max_ticks / 10);
     }
+
+    #[test]
+    fn missing_evaluator_config_snapshot_yields_typed_error() {
+        let dialect = Dialect {
+            enable_top_level_stmt: true,
+            enable_keyword_only_arguments: true,
+            ..Dialect::Standard
+        };
+        let ast = AstModule::parse("test.star", format!("{PRELUDE}\nx = env.secret('KEY')\n"), &dialect).unwrap();
+        let globals = GlobalsBuilder::extended_by(&[LibraryExtension::StructType, LibraryExtension::Json])
+            .with(ved_env_module)
+            .build();
+        Module::with_temp_heap(|module| {
+            let mut eval = Evaluator::new(&module);
+            let err = eval.eval_module(ast, &globals).unwrap_err();
+            assert!(
+                err.to_string().contains("Configuration snapshot missing from Starlark evaluator context"),
+                "expected typed missing snapshot error, got: {err}"
+            );
+        });
+    }
 }
+

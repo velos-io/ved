@@ -106,6 +106,9 @@ pub enum StarlarkError {
     #[error("Starlark result binding '{0}' was not defined")]
     MissingResult(String),
 
+    #[error("Configuration snapshot missing from Starlark evaluator context")]
+    MissingConfigSnapshot,
+
     #[error("{0}")]
     Evaluation(String),
 }
