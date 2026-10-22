@@ -326,7 +326,10 @@ fn build_compose_service_typed(
             .clone()
             .unwrap_or_else(|| "unless-stopped".to_string()),
     );
-    let build = svc.build.as_ref().map(|b| Value::Mapping(resolve_build_mapping(b)));
+    let build = svc
+        .build
+        .as_ref()
+        .map(|b| Value::Mapping(resolve_build_mapping(b)));
     let networks = Some(vec![spec.network.clone()]);
     let profiles = build_profiles_value(&svc.group, profile_name);
     let labels = build_ingress_labels(svc.ingress.as_deref(), ingress_suffix);
@@ -527,12 +530,7 @@ fn build_env_map(env: &IndexMap<String, serde_json::Value>) -> Option<IndexMap<S
 }
 
 fn build_mounts_value(mounts: &[MountSpec]) -> Option<Vec<String>> {
-    (!mounts.is_empty()).then(|| {
-        mounts
-            .iter()
-            .map(|m| m.raw.clone())
-            .collect()
-    })
+    (!mounts.is_empty()).then(|| mounts.iter().map(|m| m.raw.clone()).collect())
 }
 
 fn build_depends_on(

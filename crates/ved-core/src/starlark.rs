@@ -631,18 +631,24 @@ mod budget_measurements {
             enable_keyword_only_arguments: true,
             ..Dialect::Standard
         };
-        let ast = AstModule::parse("test.star", format!("{PRELUDE}\nx = env.secret('KEY')\n"), &dialect).unwrap();
-        let globals = GlobalsBuilder::extended_by(&[LibraryExtension::StructType, LibraryExtension::Json])
-            .with(ved_env_module)
-            .build();
+        let ast = AstModule::parse(
+            "test.star",
+            format!("{PRELUDE}\nx = env.secret('KEY')\n"),
+            &dialect,
+        )
+        .unwrap();
+        let globals =
+            GlobalsBuilder::extended_by(&[LibraryExtension::StructType, LibraryExtension::Json])
+                .with(ved_env_module)
+                .build();
         Module::with_temp_heap(|module| {
             let mut eval = Evaluator::new(&module);
             let err = eval.eval_module(ast, &globals).unwrap_err();
             assert!(
-                err.to_string().contains("Configuration snapshot missing from Starlark evaluator context"),
+                err.to_string()
+                    .contains("Configuration snapshot missing from Starlark evaluator context"),
                 "expected typed missing snapshot error, got: {err}"
             );
         });
     }
 }
-

@@ -473,7 +473,9 @@ impl ValidatedSpec {
                         .unwrap_or(0);
                     let mut cycle: Vec<_> = stack[begin..]
                         .iter()
-                        .filter_map(|(node, _)| workloads.get_index(*node).map(|e| e.0.name.as_str()))
+                        .filter_map(|(node, _)| {
+                            workloads.get_index(*node).map(|e| e.0.name.as_str())
+                        })
                         .collect();
                     if let Some(target_entry) = workloads.get_index(target) {
                         cycle.push(target_entry.0.name.as_str());
@@ -889,7 +891,9 @@ mod graph_reason_tests {
             services: IndexMap::new(),
             jobs: IndexMap::new(),
         };
-        profile_spec.services.insert("worker".into(), ServiceSpec::default());
+        profile_spec
+            .services
+            .insert("worker".into(), ServiceSpec::default());
         wire.profiles.insert("prod".into(), profile_spec);
 
         let validated = ValidatedSpec::try_from(wire).unwrap();

@@ -308,14 +308,20 @@ pub fn sync_stacks_catalog_with_context_and_cancellation(
     context: &crate::WorkspaceContext,
     token: ved_process::CancellationToken,
 ) -> Result<()> {
-    StackSyncOptions::new().context(context).cancellation(token).sync()
+    StackSyncOptions::new()
+        .context(context)
+        .cancellation(token)
+        .sync()
 }
 
 pub fn sync_stacks_catalog_with_context_and_driver<D: VcsDriver>(
     context: &crate::WorkspaceContext,
     driver: &D,
 ) -> Result<()> {
-    StackSyncOptions::new().context(context).driver(driver).sync()
+    StackSyncOptions::new()
+        .context(context)
+        .driver(driver)
+        .sync()
 }
 pub fn apply_stacks_with_context(
     stack_names: &[String],

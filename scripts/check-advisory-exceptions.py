@@ -7,7 +7,67 @@ import json
 from pathlib import Path
 import subprocess
 import sys
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+    except ModuleNotFoundError:
+        import re
+
+        class _SimpleTomlFallback:
+            @staticmethod
+            def load(f):
+                content = f.read().decode("utf-8") if isinstance(f.read(0), bytes) else f.read()
+                data = {}
+                current_section = data
+                in_multiline_list = None
+                list_acc = ""
+                for line in content.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    if in_multiline_list:
+                        list_acc += " " + line
+                        if "]" in line:
+                            items = []
+                            for m in re.finditer(r'\{\s*id\s*=\s*"([^"]+)"\s*,\s*reason\s*=\s*"([^"]+)"\s*\}', list_acc):
+                                items.append({"id": m.group(1), "reason": m.group(2)})
+                            current_section[in_multiline_list] = items
+                            in_multiline_list = None
+                        continue
+                    if line.startswith("[") and line.endswith("]"):
+                        sec_name = line[1:-1].strip()
+                        current_section = data.setdefault(sec_name, {})
+                        continue
+                    if "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip()
+                        if v.startswith("[") and not v.endswith("]"):
+                            in_multiline_list = k
+                            list_acc = v
+                            continue
+                        if v == "true":
+                            current_section[k] = True
+                        elif v == "false":
+                            current_section[k] = False
+                        elif v.isdigit():
+                            current_section[k] = int(v)
+                        elif v.startswith('"') and v.endswith('"'):
+                            current_section[k] = v[1:-1]
+                        elif v.startswith("[") and v.endswith("]"):
+                            inner = v[1:-1].strip()
+                            if inner.startswith("{"):
+                                items = []
+                                for m in re.finditer(r'\{\s*id\s*=\s*"([^"]+)"\s*,\s*reason\s*=\s*"([^"]+)"\s*\}', inner):
+                                    items.append({"id": m.group(1), "reason": m.group(2)})
+                                current_section[k] = items
+                            else:
+                                current_section[k] = [x.strip().strip('"') for x in inner.split(",") if x.strip()]
+                return data
+
+        tomllib = _SimpleTomlFallback
 
 EXPIRES = datetime(2027, 1, 9, tzinfo=timezone.utc)
 # ID -> (affected package, reviewed version, exact direct reverse dependencies).

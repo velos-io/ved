@@ -23,17 +23,65 @@ package_target=$("${CARGO_CMD[@]}" metadata --no-deps --format-version 1 | pytho
 package_fixture=$(mktemp -d)
 trap 'rm -rf "$package_fixture"' EXIT
 python3 - "$PWD" "$package_fixture" "$package_target" <<'PY'
-import pathlib, sys, tarfile, tomllib
+import pathlib, sys, tarfile
+
+try:
+    import tomllib
+    def parse_toml(text):
+        return tomllib.loads(text)
+except ModuleNotFoundError:
+    try:
+        import tomli as tomllib
+        def parse_toml(text):
+            return tomllib.loads(text)
+    except ModuleNotFoundError:
+        import re
+        def parse_toml(text):
+            data = {}
+            current = data
+            for line in text.splitlines():
+                line = line.strip()
+                if not line or line.startswith('#'):
+                    continue
+                if line.startswith('[') and line.endswith(']'):
+                    sec = line[1:-1].strip()
+                    parts = sec.split('.')
+                    d = data
+                    for p in parts:
+                        d = d.setdefault(p, {})
+                    current = d
+                    continue
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    k, v = k.strip(), v.strip()
+                    if v.startswith('{') and v.endswith('}'):
+                        tbl = {}
+                        for m in re.finditer(r'([a-zA-Z0-9_-]+)\s*=\s*(?:"([^"]*)"|([^,\s}]+))', v[1:-1]):
+                            key = m.group(1)
+                            val = m.group(2) if m.group(2) is not None else m.group(3)
+                            tbl[key] = val
+                        current[k] = tbl
+                    elif v.startswith('"') and v.endswith('"'):
+                        current[k] = v[1:-1]
+                    elif v == 'true':
+                        current[k] = True
+                    elif v == 'false':
+                        current[k] = False
+            return data
+
 root, fixture, target = map(pathlib.Path, sys.argv[1:])
 packages = {}
 for crate in ('ved-process', 'ved-core', 'ved'):
-    source = tomllib.loads((root / 'crates' / crate / 'Cargo.toml').read_text())
+    source = parse_toml((root / 'crates' / crate / 'Cargo.toml').read_text())
     version = source['package']['version']
     archive = target / 'package' / f'{crate}-{version}.crate'
     with tarfile.open(archive) as contents:
-        contents.extractall(fixture, filter='data')
+        if hasattr(tarfile, 'data_filter'):
+            contents.extractall(fixture, filter='data')
+        else:
+            contents.extractall(fixture)
     extracted = fixture / f'{crate}-{version}'
-    manifest = tomllib.loads((extracted / 'Cargo.toml').read_text())
+    manifest = parse_toml((extracted / 'Cargo.toml').read_text())
     assert manifest['package']['name'] == crate
     assert manifest['package']['version'] == version
     (extracted / 'original-lock.toml').write_bytes((extracted / 'Cargo.lock').read_bytes())
@@ -66,13 +114,30 @@ for package_manifest in "$package_fixture"/ved-[0-9]*/Cargo.toml "$package_fixtu
     *) "${CARGO_CMD[@]}" update --offline -p ved-core -p ved-process --manifest-path "$package_manifest" --config "$package_overrides" ;;
   esac
   python3 - "$package_manifest" <<'PYLOCK'
-import pathlib, sys, tomllib
+import pathlib, sys
+
 root = pathlib.Path(sys.argv[1]).parent
 def external_graph(path):
-    packages = tomllib.loads(path.read_text())['package']
+    packages = []
+    current = None
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line == '[[package]]':
+            if current:
+                packages.append(current)
+            current = {}
+        elif current is not None and '=' in line:
+            k, v = line.split('=', 1)
+            k = k.strip()
+            v = v.strip().strip('"')
+            current[k] = v
+    if current:
+        packages.append(current)
     return {(p['name'], p['version'], p.get('source'), p.get('checksum'))
             for p in packages if p['name'] not in {'ved', 'ved-core', 'ved-process'}}
-assert external_graph(root / 'Cargo.lock') == external_graph(root / 'original-lock.toml'), 'Archive non-sibling locked dependency graph changed'
+    diff1 = external_graph(root / 'Cargo.lock') - external_graph(root / 'original-lock.toml')
+    diff2 = external_graph(root / 'original-lock.toml') - external_graph(root / 'Cargo.lock')
+    assert not diff1 and not diff2, f'Archive non-sibling locked dependency graph changed: added={diff1}, removed={diff2}'
 PYLOCK
   case "$package_manifest" in
     */ved-process-*) "${CARGO_CMD[@]}" build --locked --manifest-path "$package_manifest" ;;

@@ -104,7 +104,9 @@ pub fn load_any_spec_with_context_and_dependencies(
     path: &Path,
     context: &crate::WorkspaceContext,
 ) -> Result<LoadedSpec> {
-    SpecLoader::new().context(context).load_with_dependencies(path)
+    SpecLoader::new()
+        .context(context)
+        .load_with_dependencies(path)
 }
 pub fn load_any_spec_with_context_and_dependencies_and_options(
     path: &Path,
@@ -393,7 +395,8 @@ services:
 
     #[test]
     fn spec_loader_builder_supports_all_permutations() {
-        let root = std::env::temp_dir().join(format!("ved-spec-loader-builder-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("ved-spec-loader-builder-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         let spec_path = root.join("ved.yaml");
@@ -418,7 +421,9 @@ services:
             .unwrap();
         assert_eq!(validated.as_spec().app, "builder-test");
 
-        let loaded = SpecLoader::new().load_with_dependencies(&spec_path).unwrap();
+        let loaded = SpecLoader::new()
+            .load_with_dependencies(&spec_path)
+            .unwrap();
         assert_eq!(loaded.spec.app, "builder-test");
         assert!(!loaded.dependencies.is_empty());
         let _ = fs::remove_dir_all(&root);
