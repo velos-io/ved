@@ -36,7 +36,7 @@ pub struct StackApplication {
     pub assets: Vec<StackAsset>,
 }
 
-pub(crate) fn run_git_op<R: VcsDriver>(
+pub(crate) fn run_git_op<R: VcsDriver + ?Sized>(
     runner: &R,
     op: &'static str,
     target: &str,
@@ -95,22 +95,109 @@ fn redact_url_credentials(value: &str) -> String {
     )
 }
 
+/// Options and fluent builder for synchronizing the stacks catalog.
+#[derive(Default)]
+pub struct StackSyncOptions<'a> {
+    pub context: Option<&'a crate::WorkspaceContext>,
+    pub driver: Option<&'a dyn VcsDriver>,
+    pub cancellation: Option<ved_process::CancellationToken>,
+    pub stacks_dir: Option<PathBuf>,
+    pub repo_url: Option<String>,
+}
+
+impl<'a> StackSyncOptions<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn context(mut self, context: &'a crate::WorkspaceContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    pub fn driver(mut self, driver: &'a dyn VcsDriver) -> Self {
+        self.driver = Some(driver);
+        self
+    }
+
+    pub fn cancellation(mut self, token: ved_process::CancellationToken) -> Self {
+        self.cancellation = Some(token);
+        self
+    }
+
+    pub fn stacks_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.stacks_dir = Some(dir.into());
+        self
+    }
+
+    pub fn repo_url(mut self, url: impl Into<String>) -> Self {
+        self.repo_url = Some(url.into());
+        self
+    }
+
+    pub fn sync(self) -> Result<()> {
+        sync_stacks_catalog_with_options(self)
+    }
+}
+
+pub fn sync_stacks_catalog_with_options(options: StackSyncOptions<'_>) -> Result<()> {
+    let default_ctx;
+    let context = match options.context {
+        Some(ctx) => ctx,
+        None => {
+            default_ctx = crate::WorkspaceContext::new(".");
+            &default_ctx
+        }
+    };
+    let directory = match options.stacks_dir {
+        Some(dir) => dir,
+        None => {
+            let dir = resolve_stacks_dir_with_context(context);
+            if context
+                .config()
+                .get_prop_opt(crate::r::keys::VED_STACKS_PATH)
+                .is_none()
+                && context.config().interpolation_value("HOME").is_none()
+                && !dir.exists()
+            {
+                return Err(VedError::config("HOME environment variable is not set"));
+            }
+            dir
+        }
+    };
+    let repository = match options.repo_url {
+        Some(url) => url,
+        None => context.config().get_prop(
+            crate::r::keys::VED_STACKS_REPO,
+            "https://github.com/velos-io/stacks.git",
+        ),
+    };
+    let default_runner;
+    let driver: &dyn VcsDriver = match options.driver {
+        Some(d) => d,
+        None => {
+            let token = options.cancellation.unwrap_or_default();
+            default_runner = crate::vcs::HostGitRunner::new(token);
+            &default_runner
+        }
+    };
+    sync_stacks_catalog_internal(driver, &directory, &repository)
+}
+
 /// Sync the stacks catalog from remote if needed.
 pub fn sync_stacks_catalog() -> Result<()> {
-    let context = crate::WorkspaceContext::new(".");
-    sync_stacks_catalog_with_context(&context)
+    StackSyncOptions::new().sync()
 }
 
 /// Sync the catalog using the host application's cancellation policy.
-pub fn sync_stacks_catalog_with_cancellation(_token: ved_process::CancellationToken) -> Result<()> {
-    sync_stacks_catalog()
+pub fn sync_stacks_catalog_with_cancellation(token: ved_process::CancellationToken) -> Result<()> {
+    StackSyncOptions::new().cancellation(token).sync()
 }
 
 /// Entry point supporting injected runners for tests and host integration.
 #[allow(dead_code)]
 pub fn sync_stacks_catalog_with_runner<R: VcsDriver>(runner: &R) -> Result<()> {
-    let context = crate::WorkspaceContext::new(".");
-    sync_stacks_catalog_with_context_and_driver(&context, runner)
+    StackSyncOptions::new().driver(runner).sync()
 }
 
 pub fn sync_stacks_catalog_with_driver<D: VcsDriver>(
@@ -118,10 +205,14 @@ pub fn sync_stacks_catalog_with_driver<D: VcsDriver>(
     stacks_dir: &Path,
     repo_url: &str,
 ) -> Result<()> {
-    sync_stacks_catalog_internal(driver, stacks_dir, repo_url)
+    StackSyncOptions::new()
+        .driver(driver)
+        .stacks_dir(stacks_dir)
+        .repo_url(repo_url)
+        .sync()
 }
 
-pub(crate) fn sync_stacks_catalog_internal<R: VcsDriver>(
+pub(crate) fn sync_stacks_catalog_internal<R: VcsDriver + ?Sized>(
     runner: &R,
     stacks_dir: &Path,
     repo_url: &str,
@@ -208,40 +299,23 @@ impl VcsDriver for PassiveVcsDriver {
 }
 
 pub fn sync_stacks_catalog_with_context(context: &crate::WorkspaceContext) -> Result<()> {
-    sync_stacks_catalog_with_context_and_cancellation(
-        context,
-        ved_process::CancellationToken::new(),
-    )
+    StackSyncOptions::new().context(context).sync()
 }
 
 /// Sync the contextual catalog using the host application's cancellation policy.
+#[allow(dead_code)]
 pub fn sync_stacks_catalog_with_context_and_cancellation(
     context: &crate::WorkspaceContext,
     token: ved_process::CancellationToken,
 ) -> Result<()> {
-    let runner = crate::vcs::HostGitRunner::new(token);
-    sync_stacks_catalog_with_context_and_driver(context, &runner)
+    StackSyncOptions::new().context(context).cancellation(token).sync()
 }
 
 pub fn sync_stacks_catalog_with_context_and_driver<D: VcsDriver>(
     context: &crate::WorkspaceContext,
     driver: &D,
 ) -> Result<()> {
-    let directory = resolve_stacks_dir_with_context(context);
-    if context
-        .config()
-        .get_prop_opt(crate::r::keys::VED_STACKS_PATH)
-        .is_none()
-        && context.config().interpolation_value("HOME").is_none()
-        && !directory.exists()
-    {
-        return Err(VedError::config("HOME environment variable is not set"));
-    }
-    let repository = context.config().get_prop(
-        crate::r::keys::VED_STACKS_REPO,
-        "https://github.com/velos-io/stacks.git",
-    );
-    sync_stacks_catalog_internal(driver, &directory, &repository)
+    StackSyncOptions::new().context(context).driver(driver).sync()
 }
 pub fn apply_stacks_with_context(
     stack_names: &[String],
@@ -1311,6 +1385,19 @@ mod tests {
             other => panic!("Expected StacksSyncError, got {other:?}"),
         }
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_stack_sync_options_builder() {
+        let dir = test_dir("builder-sync");
+        let runner = MockGitRunner::success();
+        let res = StackSyncOptions::new()
+            .driver(&runner)
+            .stacks_dir(&dir)
+            .repo_url("https://example.com/stacks.git")
+            .sync();
+        assert!(res.is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 }

@@ -125,7 +125,7 @@ pub use parser::{
     expand_env_vars, expand_env_vars_with, load_any_spec, load_any_spec_with_context,
     load_any_spec_with_context_and_dependencies,
     load_any_spec_with_context_and_dependencies_and_options, load_spec, load_validated_spec,
-    LoadedSpec,
+    LoadedSpec, SpecLoader,
 };
 #[cfg(feature = "host")]
 pub use secrets::looks_like_secret;
@@ -139,7 +139,8 @@ pub use stacks::{
     load_stacks_with_context, load_stacks_with_context_and_options, resolve_stacks_dir,
     resolve_stacks_dir_with_context, sync_stacks_catalog, sync_stacks_catalog_with_cancellation,
     sync_stacks_catalog_with_context, sync_stacks_catalog_with_context_and_driver,
-    sync_stacks_catalog_with_driver, PassiveVcsDriver,
+    sync_stacks_catalog_with_driver, sync_stacks_catalog_with_options, PassiveVcsDriver,
+    StackSyncOptions,
 };
 #[cfg(feature = "host")]
 pub use starlark::{evaluate_stack_file, load_starlark_spec};

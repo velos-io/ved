@@ -16,15 +16,95 @@ pub struct LoadedSpec {
     pub dependencies: Vec<crate::stacks::LoadedDependency>,
     pub stack_assets: Vec<crate::stacks::StackAsset>,
 }
+
+/// Fluent builder for configuring specification loading with explicit context and resource options.
+#[derive(Debug, Clone, Default)]
+pub struct SpecLoader<'a> {
+    context: Option<&'a crate::WorkspaceContext>,
+    options: Option<&'a LoadOptions>,
+}
+
+impl<'a> SpecLoader<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn context(mut self, context: &'a crate::WorkspaceContext) -> Self {
+        self.context = Some(context);
+        self
+    }
+
+    pub fn options(mut self, options: &'a LoadOptions) -> Self {
+        self.options = Some(options);
+        self
+    }
+
+    pub fn load(&self, path: &Path) -> Result<AppSpec> {
+        let default_ctx;
+        let context = match self.context {
+            Some(ctx) => ctx,
+            None => {
+                default_ctx = context_for(path);
+                &default_ctx
+            }
+        };
+        let default_opt;
+        let options = match self.options {
+            Some(opt) => opt,
+            None => {
+                default_opt = LoadOptions::from_config(context.config())?;
+                &default_opt
+            }
+        };
+        load_any_spec_with_context_and_options(path, context, options)
+    }
+
+    pub fn load_validated(&self, path: &Path) -> Result<crate::ValidatedSpec> {
+        let default_ctx;
+        let context = match self.context {
+            Some(ctx) => ctx,
+            None => {
+                default_ctx = context_for(path);
+                &default_ctx
+            }
+        };
+        let default_opt;
+        let options = match self.options {
+            Some(opt) => opt,
+            None => {
+                default_opt = LoadOptions::from_config(context.config())?;
+                &default_opt
+            }
+        };
+        load_validated_spec_with_context_and_options(path, context, options)
+    }
+
+    pub fn load_with_dependencies(&self, path: &Path) -> Result<LoadedSpec> {
+        let default_ctx;
+        let context = match self.context {
+            Some(ctx) => ctx,
+            None => {
+                default_ctx = context_for(path);
+                &default_ctx
+            }
+        };
+        let default_opt;
+        let options = match self.options {
+            Some(opt) => opt,
+            None => {
+                default_opt = LoadOptions::from_config(context.config())?;
+                &default_opt
+            }
+        };
+        load_any_spec_with_context_and_dependencies_and_options(path, context, options)
+    }
+}
+
 pub fn load_any_spec_with_context_and_dependencies(
     path: &Path,
     context: &crate::WorkspaceContext,
 ) -> Result<LoadedSpec> {
-    load_any_spec_with_context_and_dependencies_and_options(
-        path,
-        context,
-        &LoadOptions::from_config(context.config())?,
-    )
+    SpecLoader::new().context(context).load_with_dependencies(path)
 }
 pub fn load_any_spec_with_context_and_dependencies_and_options(
     path: &Path,
@@ -137,20 +217,16 @@ fn context_for(path: &Path) -> crate::WorkspaceContext {
     crate::WorkspaceContext::new(path.parent().unwrap_or(Path::new(".")))
 }
 pub fn load_any_spec(path: &Path) -> Result<AppSpec> {
-    load_any_spec_with_context(path, &context_for(path))
+    SpecLoader::new().load(path)
 }
 pub fn load_validated_spec(path: &Path) -> Result<crate::ValidatedSpec> {
-    load_validated_spec_with_context(path, &context_for(path))
+    SpecLoader::new().load_validated(path)
 }
 pub fn load_any_spec_with_context(
     path: &Path,
     context: &crate::WorkspaceContext,
 ) -> Result<AppSpec> {
-    load_any_spec_with_context_and_options(
-        path,
-        context,
-        &LoadOptions::from_config(context.config())?,
-    )
+    SpecLoader::new().context(context).load(path)
 }
 pub fn load_any_spec_with_context_and_options(
     path: &Path,
@@ -168,11 +244,7 @@ pub fn load_validated_spec_with_context(
     path: &Path,
     context: &crate::WorkspaceContext,
 ) -> Result<crate::ValidatedSpec> {
-    load_validated_spec_with_context_and_options(
-        path,
-        context,
-        &LoadOptions::from_config(context.config())?,
-    )
+    SpecLoader::new().context(context).load_validated(path)
 }
 pub fn load_validated_spec_with_context_and_options(
     path: &Path,
@@ -316,6 +388,39 @@ services:
             load_any_spec_with_context_and_dependencies(&shorthand_path, &context).unwrap();
         assert_eq!(shorthand.spec.app, "short-app");
         assert!(shorthand.spec.services.contains_key("api"));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn spec_loader_builder_supports_all_permutations() {
+        let root = std::env::temp_dir().join(format!("ved-spec-loader-builder-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let spec_path = root.join("ved.yaml");
+        fs::write(
+            &spec_path,
+            "app: builder-test\nversion: '1.0'\nservices:\n  web:\n    image: nginx\n",
+        )
+        .unwrap();
+        let context = crate::WorkspaceContext::new(root.clone());
+        let options = LoadOptions::default();
+
+        let app_spec = SpecLoader::new()
+            .context(&context)
+            .options(&options)
+            .load(&spec_path)
+            .unwrap();
+        assert_eq!(app_spec.app, "builder-test");
+
+        let validated = SpecLoader::new()
+            .context(&context)
+            .load_validated(&spec_path)
+            .unwrap();
+        assert_eq!(validated.as_spec().app, "builder-test");
+
+        let loaded = SpecLoader::new().load_with_dependencies(&spec_path).unwrap();
+        assert_eq!(loaded.spec.app, "builder-test");
+        assert!(!loaded.dependencies.is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 }
