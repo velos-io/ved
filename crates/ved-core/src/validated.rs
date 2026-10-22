@@ -237,7 +237,10 @@ fn dependency(
     let normalised = if !raw.contains(':') && !names.contains_key(raw) {
         match raw.rsplit_once('.') {
             Some((target, condition))
-                if matches!(condition, "ready" | "healthy" | "started" | "success") =>
+                if matches!(
+                    condition,
+                    "ready" | "healthy" | "started" | "success" | "completed"
+                ) =>
             {
                 format!("{target}:{condition}")
             }
@@ -261,7 +264,7 @@ fn dependency(
         Some("ready") => DependencyCondition::Ready,
         Some("healthy") => DependencyCondition::Healthy,
         Some("started") => DependencyCondition::Started,
-        Some("success") => DependencyCondition::Success,
+        Some("success" | "completed") => DependencyCondition::Success,
         Some(value) => {
             let port = value.parse::<u16>().map_err(|source| {
                 VedError::from(
@@ -717,6 +720,21 @@ mod tests {
         assert_eq!(deps[1].condition(), DependencyCondition::Healthy);
         assert_eq!(deps[2].target(), "db.healthy");
         assert_eq!(deps[2].condition(), DependencyCondition::Started);
+    }
+    #[test]
+    fn completed_condition_alias_maps_to_success() {
+        let mut spec = spec();
+        spec.services
+            .insert("flyway".into(), ServiceSpec::default());
+        spec.services
+            .insert("worker".into(), ServiceSpec::default());
+        spec.services["web"].wait_for = vec!["flyway.completed".into(), "worker:completed".into()];
+        let validated = ValidatedSpec::try_from(spec).unwrap();
+        let deps = validated.workload(None, "web").unwrap().dependencies();
+        assert_eq!(deps[0].target(), "flyway");
+        assert_eq!(deps[0].condition(), DependencyCondition::Success);
+        assert_eq!(deps[1].target(), "worker");
+        assert_eq!(deps[1].condition(), DependencyCondition::Success);
     }
     #[test]
     fn deep_dependency_graph_uses_iterative_traversal() {

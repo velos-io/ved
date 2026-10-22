@@ -22,3 +22,25 @@ fn test_compile_ved_yaml() {
     assert!(compose_str.contains("container_name: postgres"));
     assert!(compose_str.contains("demo-net"));
 }
+
+#[test]
+fn test_compile_completed_wait_for_condition() {
+    let mut spec = ved_core::AppSpec::default();
+    spec.services.insert(
+        "migration".into(),
+        ved_core::ServiceSpec {
+            image: Some("flyway/flyway".into()),
+            ..Default::default()
+        },
+    );
+    spec.services.insert(
+        "api".into(),
+        ved_core::ServiceSpec {
+            image: Some("node:18".into()),
+            wait_for: vec!["migration.completed".into()],
+            ..Default::default()
+        },
+    );
+    let compose_str = support::compose(&spec, BTreeMap::new()).expect("Failed to generate compose");
+    assert!(compose_str.contains("condition: service_completed_successfully"));
+}
