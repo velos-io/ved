@@ -102,13 +102,13 @@ services = [
     assert!(prom_svc
         .mounts
         .iter()
-        .any(|m| m.starts_with(".ved/stacks/otel/config/prometheus.yml:")));
+        .any(|m| m.starts_with(&format!("{}:", prom_cfg.display()))));
 
     let collector_svc = &spec.services["otel-collector"];
     assert!(collector_svc
         .mounts
         .iter()
-        .any(|m| m.starts_with(".ved/stacks/otel/config/otel-collector-config.yaml:")));
+        .any(|m| m.starts_with(&format!("{}:", otel_cfg.display()))));
 
     let compose_yaml =
         support::compose(&spec, BTreeMap::new()).expect("Failed to generate compose YAML");
@@ -116,8 +116,8 @@ services = [
     assert!(compose_yaml.contains("image: prom/prometheus:v2.55.1"));
     assert!(compose_yaml.contains("image: otel/opentelemetry-collector:0.114.0"));
     assert!(compose_yaml.contains("image: grafana/grafana:11.0.0"));
-    assert!(compose_yaml.contains(".ved/stacks/otel/config/prometheus.yml"));
-    assert!(compose_yaml.contains(".ved/stacks/otel/config/otel-collector-config.yaml"));
+    assert!(compose_yaml.contains(&prom_cfg.display().to_string()));
+    assert!(compose_yaml.contains(&otel_cfg.display().to_string()));
 
     assert!(compose_yaml.contains("condition: service_healthy"));
     assert!(compose_yaml.contains("condition: service_started"));

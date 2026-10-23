@@ -714,6 +714,72 @@ fn format_command_value(cmd: &CommandSpec) -> Value {
     }
 }
 
+/// Rewrites build.context to an absolute path anchored at the workspace root.
+/// Skips URLs and already-absolute paths.
+pub fn root_anchor_build_context(build_val: &str, root: &std::path::Path) -> String {
+    let trimmed = build_val.trim();
+    if is_url(trimmed) {
+        return build_val.to_string();
+    }
+
+    if let Ok(serde_json::Value::Object(mut map)) =
+        serde_json::from_str::<serde_json::Value>(trimmed)
+    {
+        if let Some(serde_json::Value::String(ref ctx)) = map.get("context") {
+            if !is_url(ctx) && !std::path::Path::new(ctx).is_absolute() {
+                let rel = ctx.trim_start_matches("./");
+                let anchored = if rel.is_empty() || rel == "." {
+                    root.to_path_buf()
+                } else {
+                    root.join(rel)
+                };
+                map.insert(
+                    "context".to_string(),
+                    serde_json::Value::String(anchored.to_string_lossy().into_owned()),
+                );
+                return serde_json::to_string(&map).unwrap_or_else(|_| build_val.to_string());
+            }
+        }
+        return build_val.to_string();
+    }
+
+    if let Some((ctx, df)) = trimmed.split_once(':') {
+        if is_url(ctx) {
+            return build_val.to_string();
+        }
+        if std::path::Path::new(ctx).is_absolute() {
+            return build_val.to_string();
+        }
+        let rel = ctx.trim_start_matches("./");
+        let anchored = if rel.is_empty() || rel == "." {
+            root.to_path_buf()
+        } else {
+            root.join(rel)
+        };
+        return format!("{}:{df}", anchored.to_string_lossy());
+    }
+
+    if std::path::Path::new(trimmed).is_absolute() {
+        return build_val.to_string();
+    }
+
+    let rel = trimmed.trim_start_matches("./");
+    let anchored = if rel.is_empty() || rel == "." {
+        root.to_path_buf()
+    } else {
+        root.join(rel)
+    };
+    anchored.to_string_lossy().into_owned()
+}
+
+fn is_url(s: &str) -> bool {
+    s.starts_with("http://")
+        || s.starts_with("https://")
+        || s.starts_with("git://")
+        || s.starts_with("git@")
+        || s.starts_with("ssh://")
+}
+
 fn resolve_build_mapping(build_val: &str) -> Mapping {
     let trimmed = build_val.trim();
 
@@ -771,7 +837,9 @@ fn resolve_build_mapping(build_val: &str) -> Mapping {
         }
     }
 
-    let (context, dockerfile) = if trimmed.is_empty() || trimmed == "." || trimmed == "./" {
+    let (context, dockerfile) = if std::path::Path::new(trimmed).is_absolute() {
+        (trimmed.to_string(), "Dockerfile".to_string())
+    } else if trimmed.is_empty() || trimmed == "." || trimmed == "./" {
         (".".to_string(), "Dockerfile".to_string())
     } else {
         let clean = trimmed.trim_start_matches("./");
@@ -1013,9 +1081,9 @@ mod tests {
 
         let compose = generate_compose(&spec).expect("Failed to generate compose");
         assert!(compose.contains("name: build-test-app"));
-        assert!(compose.contains("context: ."));
+        let root = std::env::current_dir().unwrap();
+        assert!(compose.contains(&format!("context: {}", root.display())));
         assert!(compose.contains("dockerfile: Dockerfile"));
-        assert!(!compose.contains("/Dockerfile"));
         assert!(!compose.contains("REDHAT_BASE_REGISTRY"));
     }
 

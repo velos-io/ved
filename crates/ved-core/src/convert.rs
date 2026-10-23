@@ -1122,8 +1122,9 @@ services:
         let generated_compose =
             crate::compose::generate_compose(&spec).expect("Failed to generate compose from spec");
 
+        let root = std::env::current_dir().unwrap();
         assert!(generated_compose.contains("web:"));
-        assert!(generated_compose.contains("context: ."));
+        assert!(generated_compose.contains(&format!("context: {}", root.display())));
         assert!(generated_compose.contains("dockerfile: Dockerfile"));
 
         assert!(generated_compose.contains("worker:"));

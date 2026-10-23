@@ -278,18 +278,28 @@ impl WorkspaceContext {
     }
     pub fn prepare_spec(&self, spec: &AppSpec) -> AppSpec {
         let mut spec = spec.clone();
-        for (name, service) in &mut spec.services {
-            service.enabled = Some(service.enabled.unwrap_or_else(|| self.enabled(name)));
+        for (_name, service) in &mut spec.services {
+            service.enabled = Some(service.enabled.unwrap_or_else(|| self.enabled(_name)));
+            service.mounts = root_anchor_mounts(&service.mounts, &self.root);
+            if let Some(ref b) = service.build {
+                service.build = Some(crate::compose::root_anchor_build_context(b, &self.root));
+            }
         }
-        for (name, job) in &mut spec.jobs {
-            job.enabled = Some(job.enabled.unwrap_or_else(|| self.enabled(name)));
+        for (_name, job) in &mut spec.jobs {
+            job.enabled = Some(job.enabled.unwrap_or_else(|| self.enabled(_name)));
+            job.mounts = root_anchor_mounts(&job.mounts, &self.root);
         }
         for profile in spec.profiles.values_mut() {
-            for (name, service) in &mut profile.services {
-                service.enabled = Some(service.enabled.unwrap_or_else(|| self.enabled(name)));
+            for (_name, service) in &mut profile.services {
+                service.enabled = Some(service.enabled.unwrap_or_else(|| self.enabled(_name)));
+                service.mounts = root_anchor_mounts(&service.mounts, &self.root);
+                if let Some(ref b) = service.build {
+                    service.build = Some(crate::compose::root_anchor_build_context(b, &self.root));
+                }
             }
-            for (name, job) in &mut profile.jobs {
-                job.enabled = Some(job.enabled.unwrap_or_else(|| self.enabled(name)));
+            for (_name, job) in &mut profile.jobs {
+                job.enabled = Some(job.enabled.unwrap_or_else(|| self.enabled(_name)));
+                job.mounts = root_anchor_mounts(&job.mounts, &self.root);
             }
         }
         let current_cfg_rel = self
@@ -343,6 +353,59 @@ impl WorkspaceContext {
         !matches!(value.as_str(), "0" | "false" | "no" | "off")
     }
 }
+
+/// Rewrites relative host-path mounts to be anchored at the workspace root.
+/// Skips named volumes, PVC-style sources, and ConfigMap references.
+pub fn root_anchor_mounts(mounts: &[String], root: &Path) -> Vec<String> {
+    mounts
+        .iter()
+        .map(|mount| {
+            let trimmed = mount.trim();
+            if trimmed.starts_with("cm:") || trimmed.starts_with("configmap:") {
+                return mount.clone();
+            }
+
+            let parts: Vec<&str> = trimmed.split(':').collect();
+            if parts.len() < 2 || parts.len() > 3 {
+                return mount.clone();
+            }
+
+            let src = parts[0];
+            let dst = parts[1];
+            let mode = parts.get(2).copied();
+
+            if src.is_empty() || dst.is_empty() {
+                return mount.clone();
+            }
+
+            // Host paths start with ./, ../, /, or contain a / separator.
+            // Pure tokens without slashes are named volumes or PVCs.
+            let is_host_path = src.starts_with("./")
+                || src.starts_with("../")
+                || src.starts_with('/')
+                || src.contains('/');
+
+            if !is_host_path || Path::new(src).is_absolute() {
+                return mount.clone();
+            }
+
+            let rel = src.trim_start_matches("./");
+            let anchored = if rel.is_empty() || rel == "." {
+                root.to_path_buf()
+            } else {
+                root.join(rel)
+            };
+
+            let anchored_src = anchored.to_string_lossy();
+            if let Some(m) = mode {
+                format!("{anchored_src}:{dst}:{m}")
+            } else {
+                format!("{anchored_src}:{dst}")
+            }
+        })
+        .collect()
+}
+
 #[cfg(feature = "host")]
 fn resolve_paths(
     paths: impl IntoIterator<Item = PathBuf>,

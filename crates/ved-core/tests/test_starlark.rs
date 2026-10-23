@@ -32,12 +32,24 @@ fn test_vedfile_starlark_evaluation() {
     assert_eq!(pg.group, "infra");
     assert_eq!(pg.mounts, vec!["postgres-data:/var/lib/postgresql/data"]);
 
+    let expected_root = std::env::current_dir().unwrap().join("../../examples/full");
     let lambda = &spec.services["lambda-emulator"];
-    assert_eq!(lambda.build.as_deref(), Some("./lambda-emulator"));
+    assert_eq!(
+        lambda.build.as_deref(),
+        Some(
+            expected_root
+                .join("lambda-emulator")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
     assert_eq!(lambda.memory.as_deref(), Some("512Mi"));
     assert_eq!(
         lambda.mounts,
-        vec!["./config/app.json:/etc/app/config.json:ro"]
+        vec![format!(
+            "{}:/etc/app/config.json:ro",
+            expected_root.join("config/app.json").display()
+        )]
     );
 
     assert!(spec.jobs.contains_key("flyway-demo"));
