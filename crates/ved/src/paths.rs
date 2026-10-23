@@ -55,7 +55,23 @@ impl WorkspacePaths {
                 let p = if p.is_absolute() { p } else { cwd.join(p) };
                 (p, true)
             }
-            _ => (root.join(ved_core::r::dirs::CONFIG_DIR), false),
+            _ => {
+                let local = root.join(ved_core::r::dirs::CONFIG_DIR);
+                let fallback = root.parent().map(|p| p.join(ved_core::r::dirs::CONFIG_DIR));
+                if !local.is_dir() {
+                    if let Some(parent) = fallback {
+                        if parent.is_dir() {
+                            (parent, false)
+                        } else {
+                            (local, false)
+                        }
+                    } else {
+                        (local, false)
+                    }
+                } else {
+                    (local, false)
+                }
+            }
         };
 
         let env_work = env_lookup("VED_WORK_DIR").filter(|s| !s.trim().is_empty());
@@ -392,6 +408,31 @@ mod tests {
         assert!(preflight(&paths_rw, DirNeeds::ReadWrite).is_ok());
         assert!(paths_rw.work_dir.exists());
         assert!(paths_rw.output_dir.as_ref().unwrap().exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_parent_config_fallback() {
+        let tmp = std::env::temp_dir().join(format!("ved_paths_parent_cfg_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let parent_cfg = tmp.join("config");
+        let subproject = tmp.join("subproject");
+        fs::create_dir_all(&parent_cfg).unwrap();
+        fs::create_dir_all(&subproject).unwrap();
+
+        let cli = CliDirs {
+            dir: Some(subproject.clone()),
+            ..Default::default()
+        };
+        let paths = WorkspacePaths::resolve_with_env(&cli, &tmp, |_| None);
+        assert_eq!(paths.config_dir, parent_cfg);
+
+        // When subproject has its own config, it takes precedence over parent config
+        let local_cfg = subproject.join("config");
+        fs::create_dir_all(&local_cfg).unwrap();
+        let paths_local = WorkspacePaths::resolve_with_env(&cli, &tmp, |_| None);
+        assert_eq!(paths_local.config_dir, local_cfg);
 
         let _ = fs::remove_dir_all(&tmp);
     }
