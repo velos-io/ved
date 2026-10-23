@@ -592,7 +592,7 @@ pub enum HealthProbe {
         port: u16,
     },
     Exec {
-        command: String,
+        command: Vec<String>,
     },
 }
 
@@ -627,7 +627,7 @@ impl HealthProbe {
             }
         } else {
             Self::Exec {
-                command: trimmed.to_string(),
+                command: vec!["sh".to_string(), "-c".to_string(), trimmed.to_string()],
             }
         }
     }
@@ -958,16 +958,37 @@ impl ServiceSpec {
 
     pub fn health_probe(&self, default_port: u16) -> Option<HealthProbe> {
         let health_val = self.health_value()?;
-        let test_cmd = if let Some(cmd) = health_val.as_str() {
-            Some(cmd.to_string())
+        if let Some(cmd) = health_val.as_str() {
+            Some(HealthProbe::parse_cmd(cmd, default_port))
+        } else if let Some(arr) = health_val.as_array() {
+            let parts: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(HealthProbe::Exec { command: parts })
+            }
         } else if let Some(obj) = health_val.as_object() {
-            obj.get("test")
-                .and_then(|t| t.as_str())
-                .map(|s| s.to_string())
+            if let Some(cmd) = obj.get("test").and_then(|t| t.as_str()) {
+                Some(HealthProbe::parse_cmd(cmd, default_port))
+            } else if let Some(arr) = obj.get("test").and_then(|t| t.as_array()) {
+                let parts: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(HealthProbe::Exec { command: parts })
+                }
+            } else {
+                None
+            }
         } else {
             None
-        };
-        test_cmd.map(|cmd| HealthProbe::parse_cmd(&cmd, default_port))
+        }
     }
 
     /// Use explicit activation, then ambient host configuration when `host` is enabled.
@@ -1195,7 +1216,11 @@ mod tests {
         assert_eq!(
             probe_exec,
             HealthProbe::Exec {
-                command: "redis-cli ping".to_string()
+                command: vec![
+                    "sh".to_string(),
+                    "-c".to_string(),
+                    "redis-cli ping".to_string()
+                ]
             }
         );
     }

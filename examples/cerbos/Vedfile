@@ -1,0 +1,24 @@
+"""Vedfile — Cerbos PDP deployment."""
+
+from ved import App, Health, Port, Service
+
+app = App(
+    name="cerbos-stack",
+    version="0.1.0",
+    network="cerbos-net",
+)
+
+# Cerbos Policy Decision Point (PDP)
+# Cerbos runs as a distroless container without a shell (/bin/sh).
+# The health check executes the binary directly via exec form: ["cerbos", "healthcheck"].
+app.services.add(
+    Service(
+        name="cerbos",
+        image="ghcr.io/cerbos/cerbos:0.45.0",
+        ports=[
+            Port(container=3592, host=3592),
+            Port(container=3593, host=3593),
+        ],
+        health=Health.exec(["cerbos", "healthcheck"]),
+    )
+)

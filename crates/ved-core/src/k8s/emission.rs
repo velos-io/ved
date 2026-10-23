@@ -216,14 +216,9 @@ pub(super) fn build_service_manifest(
                     .unwrap_or(port);
                 ("tcpSocket", map(vec![("port", YamlNode::integer(port))]), 3)
             }
-            crate::model::HealthProbe::Exec { command } => (
-                "exec",
-                map(vec![(
-                    "command",
-                    strings(vec!["sh".into(), "-c".into(), command]),
-                )]),
-                5,
-            ),
+            crate::model::HealthProbe::Exec { command } => {
+                ("exec", map(vec![("command", strings(command))]), 5)
+            }
         };
         container.push((
             "readinessProbe",

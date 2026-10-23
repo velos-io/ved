@@ -433,6 +433,13 @@ fn build_compose_healthcheck_typed(
                     test_seq.push(s.to_string());
                 }
             }
+            if !test_seq.is_empty()
+                && test_seq[0] != "CMD"
+                && test_seq[0] != "CMD-SHELL"
+                && test_seq[0] != "NONE"
+            {
+                test_seq.insert(0, "CMD".to_string());
+            }
         }
     }
 
@@ -1222,5 +1229,25 @@ mod tests {
             build_compose_service("web", &svc, &spec, &HashSet::new(), &HashSet::new(), None)
                 .unwrap_err();
         assert!(error.to_string().contains("ports"));
+    }
+
+    #[test]
+    fn test_compose_healthcheck_array_support() {
+        let mut svc = ServiceSpec {
+            image: Some("ghcr.io/cerbos/cerbos:0.45.0".to_string()),
+            ..Default::default()
+        };
+        svc.health = Some(serde_json::json!(["cerbos", "healthcheck"]));
+
+        let hc = build_compose_healthcheck(&svc).expect("healthcheck mapping");
+        let test_val = hc.get("test").expect("test entry");
+        assert_eq!(
+            test_val,
+            &Value::Sequence(vec![
+                Value::String("CMD".to_string()),
+                Value::String("cerbos".to_string()),
+                Value::String("healthcheck".to_string()),
+            ])
+        );
     }
 }
