@@ -206,9 +206,27 @@ def Job(
         enabled=act_enabled,
     )
 
-def App(name, version, network="default", ingress_suffix=None, env_files=None):
+def App(name, version, network="default", ingress_suffix=None, env_files=None, config_dir=None):
+    cli_cfg = ved_get_env("VED_CONFIG_DIR", "")
+    if cli_cfg != "":
+        config_dir = cli_cfg
+    elif config_dir == None:
+        config_dir = "."
+
     if env_files == None:
-        env_files = ["config/.env", "config/.local.env"]
+        if config_dir != "." and config_dir != "":
+            env_files = [config_dir + "/.env", config_dir + "/.local.env"]
+        else:
+            env_files = ["config/.env", "config/.local.env"]
+    else:
+        norm_env_files = []
+        for ef in env_files:
+            if config_dir != "." and config_dir != "" and not ef.startswith("/") and not ef.startswith(config_dir + "/"):
+                norm_env_files.append(config_dir + "/" + ef)
+            else:
+                norm_env_files.append(ef)
+        env_files = norm_env_files
+
     _services = []
     _jobs = []
     _active_profile = [None]
@@ -250,6 +268,7 @@ def App(name, version, network="default", ingress_suffix=None, env_files=None):
         version = version,
         network = network,
         ingress = ingress_suffix,
+        config_dir = config_dir,
         env_files = env_files,
         services = struct(add = _add_services, list = _services),
         jobs = struct(add = _add_jobs, list = _jobs),
@@ -353,6 +372,7 @@ def _app_to_spec(app):
         "version": app.version,
         "network": app.network,
         "ingress": app.ingress,
+        "configDir": app.config_dir,
         "envFiles": list(app.env_files),
         "services": services_map,
         "jobs": jobs_map,

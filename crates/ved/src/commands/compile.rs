@@ -38,6 +38,13 @@ pub(crate) fn run_compile_with_output(
     _org: &str,
     output: &dyn Outputter,
 ) -> Result<AppSpec> {
+    let spec_path = ctx.spec_path(file.as_deref());
+    if !spec_path.exists() {
+        return Err(CliError::spec_not_found(spec_path));
+    }
+    let loaded = ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())?;
+    let updated_ctx = ctx.with_spec(&loaded.spec)?;
+    let ctx = &updated_ctx;
     let layout = artifact_layout(ctx);
     let roots = trusted_roots(ctx, &layout);
     let lease = ArtifactPublisher::new(publisher_root(ctx)).lease(&roots)?;
@@ -56,6 +63,8 @@ pub(crate) fn run_compile_with_lease_and_output(
         return Err(CliError::spec_not_found(spec_path));
     }
     let loaded = ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())?;
+    let updated_ctx = ctx.with_spec(&loaded.spec)?;
+    let ctx = &updated_ctx;
     let spec = loaded.spec.clone();
     let locator = ctx.config();
     let comp_path_str = locator.get_prop(ved_core::r::keys::COMPOSE_PATH, default_compose_path());

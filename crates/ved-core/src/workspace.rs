@@ -292,16 +292,48 @@ impl WorkspaceContext {
                 job.enabled = Some(job.enabled.unwrap_or_else(|| self.enabled(name)));
             }
         }
+        let current_cfg_rel = self
+            .config_dir
+            .strip_prefix(&self.root)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| self.config_dir.to_string_lossy().into_owned());
+        let current_cfg_clean = if current_cfg_rel.is_empty() {
+            ".".to_string()
+        } else {
+            current_cfg_rel
+        };
+        if self.config_dir != self.root.join("config")
+            && self.config_dir != self.root.join(&spec.config_dir)
+        {
+            spec.config_dir = current_cfg_clean.clone();
+        }
+
         if self.config_dir != self.root.join("config")
             && spec.env_files == ["config/.env", "config/.local.env"]
         {
-            spec.env_files = vec![
-                self.config_dir.join(".env").to_string_lossy().into_owned(),
-                self.config_dir
-                    .join(".local.env")
-                    .to_string_lossy()
-                    .into_owned(),
-            ];
+            let base = if spec.config_dir != "." && !spec.config_dir.is_empty() {
+                &spec.config_dir
+            } else {
+                &current_cfg_clean
+            };
+            if base != "." && !base.is_empty() {
+                spec.env_files = vec![format!("{base}/.env"), format!("{base}/.local.env")];
+            } else {
+                spec.env_files = vec![
+                    self.config_dir.join(".env").to_string_lossy().into_owned(),
+                    self.config_dir
+                        .join(".local.env")
+                        .to_string_lossy()
+                        .into_owned(),
+                ];
+            }
+        } else if spec.config_dir != "." && !spec.config_dir.is_empty() {
+            let prefix = format!("{}/", spec.config_dir);
+            for f in &mut spec.env_files {
+                if !f.starts_with('/') && !f.starts_with(&prefix) {
+                    *f = format!("{prefix}{f}");
+                }
+            }
         }
         spec
     }

@@ -12,6 +12,12 @@ pub struct AppSpec {
     #[serde(default)]
     pub ingress: Option<String>,
     #[serde(
+        default = "default_config_dir",
+        rename = "config_dir",
+        alias = "configDir"
+    )]
+    pub config_dir: String,
+    #[serde(
         default = "default_env_files",
         rename = "env_files",
         alias = "envFiles"
@@ -27,6 +33,10 @@ pub struct AppSpec {
     pub tasks: IndexMap<String, String>,
     #[serde(default)]
     pub stacks: Vec<String>,
+}
+
+fn default_config_dir() -> String {
+    ".".to_string()
 }
 
 fn default_env_files() -> Vec<String> {
@@ -128,6 +138,7 @@ impl Default for AppSpec {
             version: "0.1.0".to_string(),
             network: default_network(),
             ingress: None,
+            config_dir: default_config_dir(),
             env_files: default_env_files(),
             services: IndexMap::new(),
             jobs: IndexMap::new(),

@@ -125,6 +125,7 @@ pub(crate) struct Cli {
     /// Configuration directory [default: {root}/config]
     #[arg(
         long = "config-dir",
+        alias = "config_dir",
         global = true,
         env = "VED_CONFIG_DIR",
         value_name = "DIR"

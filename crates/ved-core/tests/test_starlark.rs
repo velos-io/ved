@@ -406,3 +406,60 @@ app.services.add(
         "got: {err}"
     );
 }
+
+#[test]
+fn test_app_config_dir_and_env_files() {
+    let tmp = std::env::temp_dir().join(format!("ved-test-cfg-dir-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(&tmp).expect("create dir");
+
+    // 1. Default config_dir is "."
+    let v1 = tmp.join("Vedfile1");
+    std::fs::write(&v1, "app = App(name='app1', version='1.0.0')\n").unwrap();
+    let spec1 = support::load(&v1, BTreeMap::new()).unwrap();
+    assert_eq!(spec1.config_dir, ".");
+    assert_eq!(spec1.env_files, vec!["config/.env", "config/.local.env"]);
+
+    // 2. Custom config_dir with relative env_files
+    let v2 = tmp.join("Vedfile2");
+    std::fs::write(
+        &v2,
+        "app = App(name='app2', version='1.0.0', config_dir='custom-cfg', env_files=['.env', '.local.env'])\n",
+    )
+    .unwrap();
+    let spec2 = support::load(&v2, BTreeMap::new()).unwrap();
+    assert_eq!(spec2.config_dir, "custom-cfg");
+    assert_eq!(
+        spec2.env_files,
+        vec!["custom-cfg/.env", "custom-cfg/.local.env"]
+    );
+
+    // 3. Explicit config_dir="." with env_files=[".env", ".local.env"]
+    let v3 = tmp.join("Vedfile3");
+    std::fs::write(
+        &v3,
+        "app = App(name='app3', version='1.0.0', config_dir='.', env_files=['.env', '.local.env'])\n",
+    )
+    .unwrap();
+    let spec3 = support::load(&v3, BTreeMap::new()).unwrap();
+    assert_eq!(spec3.config_dir, ".");
+    assert_eq!(spec3.env_files, vec![".env", ".local.env"]);
+
+    // 4. Overridden by VED_CONFIG_DIR environment variable
+    let mut env = BTreeMap::new();
+    env.insert("VED_CONFIG_DIR".to_string(), "env-override-dir".to_string());
+    let v4 = tmp.join("Vedfile4");
+    std::fs::write(
+        &v4,
+        "app = App(name='app4', version='1.0.0', env_files=['.env', '.local.env'])\n",
+    )
+    .unwrap();
+    let spec4 = support::load(&v4, env).unwrap();
+    assert_eq!(spec4.config_dir, "env-override-dir");
+    assert_eq!(
+        spec4.env_files,
+        vec!["env-override-dir/.env", "env-override-dir/.local.env"]
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}

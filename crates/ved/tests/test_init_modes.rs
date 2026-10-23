@@ -518,3 +518,112 @@ fn test_dir_flag_workspace_context() {
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_vedfile_config_dir_attribute() {
+    let tmp = std::env::temp_dir().join(format!("ved_test_cfg_attr_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::create_dir_all(&tmp);
+
+    let custom_cfg = tmp.join("custom-cfg");
+    let _ = fs::create_dir_all(&custom_cfg);
+    fs::write(custom_cfg.join(".env"), "FOO=bar\n").unwrap();
+
+    let vedfile = r#"
+from ved import App, Port, Service
+
+app = App(
+    name="cfg-test",
+    version="0.1.0",
+    config_dir="custom-cfg",
+    env_files=[".env", ".local.env"]
+)
+app.services.add(Service(name="web", image="nginx:alpine", ports=[Port(80, host=8080)]))
+"#;
+    fs::write(tmp.join("Vedfile"), vedfile).unwrap();
+
+    let ved_bin = env!("CARGO_BIN_EXE_ved");
+    let output = support::command(ved_bin, &tmp)
+        .arg("compile")
+        .arg("-t")
+        .arg("compose")
+        .current_dir(&tmp)
+        .output()
+        .expect("Failed to execute ved compile");
+
+    assert!(
+        output.status.success(),
+        "Stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        custom_cfg.join(".generated.env").exists(),
+        "custom-cfg/.generated.env should exist!"
+    );
+
+    let compose_file = tmp.join(".ved/docker-compose.yml");
+    let compose_content = fs::read_to_string(&compose_file).unwrap();
+    assert!(
+        compose_content.contains("custom-cfg/.env"),
+        "Compose should reference custom-cfg/.env"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn test_cli_config_dir_flag_override() {
+    let tmp = std::env::temp_dir().join(format!("ved_test_cli_cfg_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::create_dir_all(&tmp);
+
+    let cli_cfg = tmp.join("from-cli-cfg");
+    let _ = fs::create_dir_all(&cli_cfg);
+    fs::write(cli_cfg.join(".env"), "CLI=true\n").unwrap();
+
+    let vedfile = r#"
+from ved import App, Port, Service
+
+app = App(
+    name="cli-override-test",
+    version="0.1.0",
+    config_dir="internal-cfg",
+    env_files=[".env", ".local.env"]
+)
+app.services.add(Service(name="web", image="nginx:alpine", ports=[Port(80, host=8080)]))
+"#;
+    fs::write(tmp.join("Vedfile"), vedfile).unwrap();
+
+    let ved_bin = env!("CARGO_BIN_EXE_ved");
+    // Test with --config_dir
+    let output = support::command(ved_bin, &tmp)
+        .arg("--config_dir")
+        .arg("from-cli-cfg")
+        .arg("compile")
+        .arg("-t")
+        .arg("compose")
+        .current_dir(&tmp)
+        .output()
+        .expect("Failed to execute ved compile");
+
+    assert!(
+        output.status.success(),
+        "Stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    assert!(
+        cli_cfg.join(".generated.env").exists(),
+        "from-cli-cfg/.generated.env should exist!"
+    );
+
+    let compose_file = tmp.join(".ved/docker-compose.yml");
+    let compose_content = fs::read_to_string(&compose_file).unwrap();
+    assert!(
+        compose_content.contains("from-cli-cfg/.env"),
+        "Compose should reference from-cli-cfg/.env: {compose_content}"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}

@@ -43,6 +43,24 @@ impl WorkspaceContext {
         self
     }
 
+    pub(crate) fn with_spec(&self, spec: &ved_core::AppSpec) -> crate::error::Result<Self> {
+        if self.paths.config_dir_explicit {
+            return Ok(self.clone());
+        }
+        let target_dir = if spec.config_dir != "." && !spec.config_dir.is_empty() {
+            self.root().join(&spec.config_dir)
+        } else {
+            return Ok(self.clone());
+        };
+        if target_dir == self.paths.config_dir {
+            return Ok(self.clone());
+        }
+        let updated_paths = self.paths.with_config_dir(target_dir);
+        let mut new_ctx = Self::with_paths(updated_paths)?;
+        new_ctx.cancellation = self.cancellation.clone();
+        Ok(new_ctx)
+    }
+
     pub(crate) fn cancellation_token(&self) -> ved_process::CancellationToken {
         self.cancellation.clone()
     }

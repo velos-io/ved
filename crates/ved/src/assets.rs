@@ -100,8 +100,10 @@ pub(crate) fn ensure_assets_with_output(
         return Err(CliError::spec_not_found(spec_path));
     }
 
-    let lease = crate::commands::compile::artifact_lease(ctx)?;
     let loaded = ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())?;
+    let updated_ctx = ctx.with_spec(&loaded.spec)?;
+    let ctx = &updated_ctx;
+    let lease = crate::commands::compile::artifact_lease(ctx)?;
     let layout = crate::commands::compile::artifact_layout(ctx);
     let fingerprint =
         crate::commands::compile::fingerprint(ctx, &loaded, target.as_str(), &layout, None)?;
@@ -136,8 +138,10 @@ pub(crate) fn ensure_k8s_assets_with_plan_and_output(
     if !spec_path.exists() {
         return Err(CliError::spec_not_found(spec_path));
     }
-    let lease = crate::commands::compile::artifact_lease(ctx)?;
     let loaded = ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())?;
+    let updated_ctx = ctx.with_spec(&loaded.spec)?;
+    let ctx = &updated_ctx;
+    let lease = crate::commands::compile::artifact_lease(ctx)?;
     let spec = loaded.spec.clone();
     let plan = KubernetesRoutingPlan::build(&spec, ctx.namespace_resolver(slot))?;
     let layout = crate::commands::compile::artifact_layout(ctx);

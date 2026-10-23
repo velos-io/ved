@@ -278,6 +278,7 @@ fn parse_shorthand_unchecked(input: &str) -> Result<AppSpec> {
         version,
         network,
         ingress: None,
+        config_dir: ".".to_string(),
         env_files: vec![
             crate::config::ENV_FILE.to_string(),
             crate::config::LOCAL_ENV_FILE.to_string(),

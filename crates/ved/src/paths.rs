@@ -141,6 +141,17 @@ impl WorkspacePaths {
     pub fn state_file(&self) -> PathBuf {
         self.work_dir.join("state.json")
     }
+
+    pub fn with_config_dir(&self, config_dir: PathBuf) -> Self {
+        Self {
+            root: self.root.clone(),
+            config_dir,
+            config_dir_explicit: true,
+            work_dir: self.work_dir.clone(),
+            work_dir_explicit: self.work_dir_explicit,
+            output_dir: self.output_dir.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
