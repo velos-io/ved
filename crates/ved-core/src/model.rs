@@ -843,9 +843,10 @@ pub struct HealthCheckSpec {
     #[serde(
         rename = "start_period",
         alias = "startPeriod",
-        default = "default_health_start_period"
+        default,
+        skip_serializing_if = "Option::is_none"
     )]
-    pub start_period: String,
+    pub start_period: Option<String>,
 }
 
 pub fn default_health_interval() -> String {
@@ -858,10 +859,6 @@ pub fn default_health_timeout() -> String {
 
 pub fn default_health_retries() -> u32 {
     5
-}
-
-pub fn default_health_start_period() -> String {
-    "30s".to_string()
 }
 
 impl HealthCheckSpec {
@@ -893,8 +890,7 @@ impl HealthCheckSpec {
                 .get("start_period")
                 .or_else(|| map.get("startPeriod"))
                 .and_then(|v| v.as_str())
-                .unwrap_or("30s")
-                .to_string();
+                .map(|s| s.to_string());
             let test = map.get("test").cloned();
             Self {
                 test,
@@ -909,7 +905,7 @@ impl HealthCheckSpec {
                 interval: default_health_interval(),
                 timeout: default_health_timeout(),
                 retries: default_health_retries(),
-                start_period: default_health_start_period(),
+                start_period: None,
             }
         }
     }

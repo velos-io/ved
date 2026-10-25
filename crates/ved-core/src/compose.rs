@@ -70,7 +70,8 @@ pub struct ComposeHealthcheck {
     pub interval: String,
     pub timeout: String,
     pub retries: u32,
-    pub start_period: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_period: Option<String>,
 }
 
 #[cfg(feature = "host")]
@@ -362,11 +363,7 @@ fn build_compose_service_typed(
     let volumes = build_mounts_value(workload.mounts());
     let healthcheck = build_compose_healthcheck_typed(svc, workload.ports());
     let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
-    let restart = Some(
-        svc.restart
-            .clone()
-            .unwrap_or_else(|| "unless-stopped".to_string()),
-    );
+    let restart = svc.restart.clone();
     let build = svc
         .build
         .as_ref()

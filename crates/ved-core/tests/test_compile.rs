@@ -59,3 +59,27 @@ fn test_compile_completed_wait_for_condition() {
     let compose_str = support::compose(&spec, BTreeMap::new()).expect("Failed to generate compose");
     assert!(compose_str.contains("condition: service_completed_successfully"));
 }
+
+#[test]
+fn test_compile_omitted_restart_and_health_start_period() {
+    let mut spec = ved_core::AppSpec::default();
+    spec.services.insert(
+        "seed".into(),
+        ved_core::ServiceSpec {
+            image: Some("busybox:1.37.0".into()),
+            health: Some(serde_json::json!({
+                "test": "CMD-SHELL true",
+                "interval": "7s",
+                "timeout": "3s",
+                "retries": 4
+            })),
+            ..Default::default()
+        },
+    );
+    let compose_str = support::compose(&spec, BTreeMap::new()).expect("Failed to generate compose");
+    assert!(!compose_str.contains("restart:"));
+    assert!(!compose_str.contains("start_period:"));
+    assert!(compose_str.contains("interval: 7s"));
+    assert!(compose_str.contains("timeout: 3s"));
+    assert!(compose_str.contains("retries: 4"));
+}
