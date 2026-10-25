@@ -42,6 +42,7 @@ pub struct ValidatedSpec {
 pub struct ValidatedWorkload {
     ports: Vec<PortSpec>,
     checked_ports: Vec<CheckedPortSpec>,
+    entrypoint: Option<CommandSpec>,
     command: Option<CommandSpec>,
     mounts: Vec<MountSpec>,
     dependencies: Vec<DependencySpec>,
@@ -78,6 +79,9 @@ impl ValidatedWorkload {
     /// Checked mappings corresponding to the compatibility `ports()` slice.
     pub fn checked_ports(&self) -> &[CheckedPortSpec] {
         &self.checked_ports
+    }
+    pub fn entrypoint(&self) -> Option<&CommandSpec> {
+        self.entrypoint.as_ref()
     }
     pub fn command(&self) -> Option<&CommandSpec> {
         self.command.as_ref()
@@ -144,6 +148,7 @@ fn workload(
     context: &Context,
     port: Option<u16>,
     ports: &[serde_json::Value],
+    entrypoint: Option<&serde_json::Value>,
     command: Option<&serde_json::Value>,
     mounts: &[String],
 ) -> Result<ValidatedWorkload> {
@@ -185,6 +190,22 @@ fn workload(
         }
     }
     let parsed_ports = checked_ports.iter().copied().map(PortSpec::from).collect();
+    let entrypoint = entrypoint
+        .map(|value| {
+            serde_json::from_value(value.clone()).map_err(|e| {
+                let cause = ValidationError::new(
+                    ValidationReason::InvalidCommand,
+                    context.profile.clone(),
+                    Some(context.kind.clone()),
+                    Some(context.name.clone()),
+                    "entrypoint",
+                )
+                .with_detail("expected an entrypoint string or list of strings")
+                .with_source(e);
+                VedError::from(cause)
+            })
+        })
+        .transpose()?;
     let command = command
         .map(|value| {
             serde_json::from_value(value.clone()).map_err(|e| {
@@ -222,6 +243,7 @@ fn workload(
     Ok(ValidatedWorkload {
         ports: parsed_ports,
         checked_ports,
+        entrypoint,
         command,
         mounts,
         dependencies: Vec::new(),
@@ -384,6 +406,7 @@ impl ValidatedSpec {
                     &context(None, "Service", name),
                     svc.port,
                     &svc.ports,
+                    svc.entrypoint.as_ref(),
                     svc.command.as_ref(),
                     &svc.mounts,
                 )?,
@@ -399,6 +422,7 @@ impl ValidatedSpec {
                     &context(None, "Job", name),
                     None,
                     &[],
+                    job.entrypoint.as_ref(),
                     job.command.as_ref(),
                     &job.mounts,
                 )?,
@@ -416,6 +440,7 @@ impl ValidatedSpec {
                         &context(Some(profile), "Service", name),
                         svc.port,
                         &svc.ports,
+                        svc.entrypoint.as_ref(),
                         svc.command.as_ref(),
                         &svc.mounts,
                     )?,
@@ -431,6 +456,7 @@ impl ValidatedSpec {
                         &context(Some(profile), "Job", name),
                         None,
                         &[],
+                        job.entrypoint.as_ref(),
                         job.command.as_ref(),
                         &job.mounts,
                     )?,
@@ -582,12 +608,20 @@ mod tests {
         let service = &mut spec.services["web"];
         service.port = Some(80);
         service.ports = vec![json!("9000:8080")];
+        service.entrypoint = Some(json!(["/entrypoint.sh", "--init"]));
         service.command = Some(json!(["sh", "", "a b"]));
         service.mounts = vec!["cm:settings:/etc/settings:ro".into()];
         let validated = ValidatedSpec::try_from(&spec).unwrap();
         spec.services["web"].ports.clear();
         let workload = validated.workload(None, "web").unwrap();
         assert_eq!(workload.ports(), &[PortSpec::new(9000, 8080)]);
+        assert_eq!(
+            workload.entrypoint(),
+            Some(&CommandSpec::List(vec![
+                "/entrypoint.sh".into(),
+                "--init".into()
+            ]))
+        );
         assert_eq!(
             workload.command(),
             Some(&CommandSpec::List(vec![
@@ -611,6 +645,22 @@ mod tests {
         for value in [json!(""), json!([])] {
             let mut spec = spec();
             spec.services["web"].command = Some(value);
+            assert!(ValidatedSpec::try_from(spec).is_ok());
+        }
+    }
+    #[test]
+    fn rejects_entrypoint_shape_but_preserves_empty_entrypoints() {
+        for value in [json!(42), json!({}), json!(["init", 2]), json!(true)] {
+            let mut spec = spec();
+            spec.services["web"].entrypoint = Some(value);
+            assert!(ValidatedSpec::try_from(spec)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid entrypoint"));
+        }
+        for value in [json!(""), json!([])] {
+            let mut spec = spec();
+            spec.services["web"].entrypoint = Some(value);
             assert!(ValidatedSpec::try_from(spec).is_ok());
         }
     }

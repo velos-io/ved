@@ -951,6 +951,7 @@ mod tests {
                 image: "myorg/sync:1.0".to_string(),
                 schedule: Some("0 1 * * *".to_string()),
                 group: "default".to_string(),
+                entrypoint: None,
                 command: Some(serde_json::json!(["./sync.sh"])),
                 hook: None,
                 mounts: vec![],
@@ -1183,6 +1184,7 @@ mod tests {
                 image: "migration:latest".to_string(),
                 group: "agent".to_string(),
                 env: migration_env,
+                entrypoint: None,
                 command: Some(serde_json::json!(["run", "migrations"])),
                 hook: None,
                 schedule: None,
@@ -1329,6 +1331,7 @@ mod tests {
             JobSpec {
                 image: "flyway/flyway:10.0".to_string(),
                 group: "infra".to_string(),
+                entrypoint: None,
                 command: Some(serde_json::json!([
                     "migrate",
                     "-url=jdbc:postgresql://localhost/db"
@@ -1361,6 +1364,47 @@ mod tests {
         assert_eq!(
             command,
             &serde_yaml::to_value(vec!["migrate", "-url=jdbc:postgresql://localhost/db"]).unwrap()
+        );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn test_service_entrypoint_and_args_k8s() {
+        let mut services = indexmap::IndexMap::new();
+        services.insert(
+            "custom-app".to_string(),
+            ServiceSpec {
+                image: Some("custom:1.0".to_string()),
+                group: "agent".to_string(),
+                entrypoint: Some(serde_json::json!(["/docker-entrypoint.sh", "--mode=prod"])),
+                command: Some(serde_json::json!(["run", "server"])),
+                ..Default::default()
+            },
+        );
+
+        let spec = AppSpec {
+            app: "entrypoint-k8s-test".to_string(),
+            version: "1.0.0".to_string(),
+            services,
+            ..Default::default()
+        };
+
+        let tmp = std::env::temp_dir().join(format!("k8s_test_ep_cmd_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        generate_k8s(&spec, &tmp).expect("generate_k8s");
+
+        let dep_yaml = fs::read_to_string(tmp.join("base/agent/custom-app.yaml")).unwrap();
+        let dep = yaml_document(&dep_yaml, "Deployment");
+        let container = &dep["spec"]["template"]["spec"]["containers"][0];
+        assert_eq!(
+            container["command"],
+            serde_yaml::to_value(vec!["/docker-entrypoint.sh", "--mode=prod"]).unwrap()
+        );
+        assert_eq!(
+            container["args"],
+            serde_yaml::to_value(vec!["run", "server"]).unwrap()
         );
 
         let _ = fs::remove_dir_all(&tmp);

@@ -384,6 +384,26 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
             }
         }
 
+        if let Some(entry_val) = svc_data.get("entrypoint") {
+            if let Some(s) = entry_val.as_str() {
+                let cleaned = clean_command_string(s);
+                if cleaned.contains('\n') {
+                    svc_kwargs.push(("entrypoint".to_string(), Expr::Multiline(cleaned)));
+                } else {
+                    svc_kwargs.push(("entrypoint".to_string(), Expr::Literal(cleaned)));
+                }
+            } else if let Some(seq) = entry_val.as_sequence() {
+                let items: Vec<Expr> = seq
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| Expr::Literal(clean_command_string(s)))
+                    .collect();
+                if !items.is_empty() {
+                    svc_kwargs.push(("entrypoint".to_string(), Expr::List(items)));
+                }
+            }
+        }
+
         if let Some(cmd_val) = svc_data.get("command") {
             if let Some(s) = cmd_val.as_str() {
                 let cleaned = clean_command_string(s);
@@ -1192,5 +1212,42 @@ services:
 
         assert!(apple_pos < mango_pos);
         assert!(mango_pos < zebra_pos);
+    }
+
+    #[test]
+    fn test_convert_compose_entrypoint() {
+        let yaml = r#"
+version: '3.8'
+services:
+  custom-app:
+    image: my-app:latest
+    entrypoint: ["/docker-entrypoint.sh", "--mode=prod"]
+    command: ["run", "server"]
+"#;
+        let tmp =
+            std::env::temp_dir().join(format!("compose_entrypoint_{}.yml", std::process::id()));
+        fs::write(&tmp, yaml).unwrap();
+
+        let starlark = convert_compose_to_ved(&tmp, "entrypoint-app").unwrap();
+        let _ = fs::remove_file(&tmp);
+
+        assert!(starlark.contains("entrypoint=[\"/docker-entrypoint.sh\", \"--mode=prod\"]"));
+        assert!(starlark.contains("command=[\"run\", \"server\"]"));
+
+        let tmp_ved =
+            std::env::temp_dir().join(format!("Vedfile_entrypoint_{}", std::process::id()));
+        fs::write(&tmp_ved, &starlark).unwrap();
+        let spec = crate::starlark::load_starlark_spec(&tmp_ved)
+            .expect("Failed to evaluate generated Starlark with entrypoint");
+        let _ = fs::remove_file(&tmp_ved);
+
+        let svc = &spec.services["custom-app"];
+        let ep = svc.entrypoint.as_ref().unwrap();
+        assert_eq!(
+            ep,
+            &serde_json::json!(["/docker-entrypoint.sh", "--mode=prod"])
+        );
+        let cmd = svc.command.as_ref().unwrap();
+        assert_eq!(cmd, &serde_json::json!(["run", "server"]));
     }
 }

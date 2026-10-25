@@ -399,6 +399,12 @@ pub fn format_starlark_body(spec: &AppSpec) -> String {
                     out.push_str(&format!("        health = \"{cmd}\",\n"));
                 }
             }
+            if let Some(ref ep) = svc.entrypoint {
+                out.push_str(&format!("        entrypoint = {ep},\n"));
+            }
+            if let Some(ref cmd) = svc.command {
+                out.push_str(&format!("        command = {cmd},\n"));
+            }
             if !svc.env.is_empty() {
                 out.push_str("        env = {\n");
                 for (k, v) in &svc.env {

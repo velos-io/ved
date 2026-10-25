@@ -157,6 +157,7 @@ impl Default for ServiceSpec {
             group: default_group(),
             port: None,
             ports: Vec::new(),
+            entrypoint: None,
             command: None,
             memory: None,
             ingress: None,
@@ -922,6 +923,8 @@ pub struct ServiceSpec {
     #[serde(default)]
     pub ports: Vec<serde_json::Value>,
     #[serde(default)]
+    pub entrypoint: Option<serde_json::Value>,
+    #[serde(default)]
     pub command: Option<serde_json::Value>,
     #[serde(default)]
     pub memory: Option<String>,
@@ -1028,6 +1031,12 @@ impl ServiceSpec {
         self.mounts.iter().map(|m| MountSpec::parse(m)).collect()
     }
 
+    pub fn typed_entrypoint(&self) -> Option<CommandSpec> {
+        self.entrypoint
+            .as_ref()
+            .and_then(|c| serde_json::from_value(c.clone()).ok())
+    }
+
     pub fn typed_command(&self) -> Option<CommandSpec> {
         self.command
             .as_ref()
@@ -1080,6 +1089,8 @@ pub struct JobSpec {
     #[serde(default = "default_group")]
     pub group: String,
     #[serde(default)]
+    pub entrypoint: Option<serde_json::Value>,
+    #[serde(default)]
     pub command: Option<serde_json::Value>,
     #[serde(default)]
     pub schedule: Option<String>,
@@ -1099,6 +1110,25 @@ pub struct JobSpec {
     pub enabled: Option<bool>,
 }
 
+impl Default for JobSpec {
+    fn default() -> Self {
+        Self {
+            image: String::new(),
+            group: default_group(),
+            entrypoint: None,
+            command: None,
+            schedule: None,
+            hook: None,
+            mounts: Vec::new(),
+            env: IndexMap::new(),
+            wait_for: Vec::new(),
+            restart: None,
+            when: None,
+            enabled: None,
+        }
+    }
+}
+
 impl JobSpec {
     /// Use explicit activation, then ambient host configuration when `host` is enabled.
     /// Without `host`, unspecified activation defaults to true. Contextual rendering
@@ -1116,6 +1146,12 @@ impl JobSpec {
             let _ = name;
             true
         }
+    }
+
+    pub fn typed_entrypoint(&self) -> Option<CommandSpec> {
+        self.entrypoint
+            .as_ref()
+            .and_then(|c| serde_json::from_value(c.clone()).ok())
     }
 
     pub fn typed_command(&self) -> Option<CommandSpec> {
@@ -1396,6 +1432,7 @@ mod tests {
         let job = JobSpec {
             image: "busybox".to_string(),
             group: "default".to_string(),
+            entrypoint: None,
             command: None,
             schedule: None,
             hook: None,

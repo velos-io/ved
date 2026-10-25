@@ -152,6 +152,7 @@ def Service(
     wait_for=[],
     restart=None,
     enabled=None,
+    entrypoint=None,
     command=None,
 ):
     norm_wait = [_normalize_wait(w) for w in wait_for]
@@ -172,6 +173,7 @@ def Service(
         waitFor=norm_wait,
         restart=restart,
         enabled=act_enabled,
+        entrypoint=entrypoint,
         command=command,
     )
 
@@ -180,6 +182,7 @@ def Job(
     image,
     group="default",
     command=[],
+    entrypoint=None,
     schedule=None,
     hook=None,
     mounts=[],
@@ -195,6 +198,7 @@ def Job(
         name=name,
         image=image,
         group=group,
+        entrypoint=entrypoint,
         command=command,
         schedule=schedule,
         hook=hook,
@@ -299,6 +303,7 @@ def _stack_services_to_dict(services):
             "waitFor": s.waitFor,
             "restart": s.restart,
             "enabled": s.enabled,
+            "entrypoint": s.entrypoint,
             "command": s.command,
         }
     return res
@@ -321,6 +326,7 @@ def _app_to_spec(app):
             "waitFor": s.waitFor,
             "restart": s.restart,
             "enabled": s.enabled,
+            "entrypoint": s.entrypoint,
             "command": s.command,
         }
 
@@ -329,6 +335,7 @@ def _app_to_spec(app):
         jobs_map[j.name] = {
             "image": j.image,
             "group": j.group,
+            "entrypoint": j.entrypoint,
             "command": j.command,
             "schedule": j.schedule,
             "hook": j.hook,
@@ -359,6 +366,7 @@ def _app_to_spec(app):
                 "waitFor": s.waitFor,
                 "restart": s.restart,
                 "enabled": s.enabled,
+                "entrypoint": s.entrypoint,
                 "command": s.command,
             }
         profiles_map[p_name] = {

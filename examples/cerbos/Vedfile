@@ -10,11 +10,13 @@ app = App(
 
 # Cerbos Policy Decision Point (PDP)
 # Cerbos runs as a distroless container without a shell (/bin/sh).
-# The health check executes the binary directly via exec form: ["cerbos", "healthcheck"].
+# The entrypoint runs the cerbos binary directly, and health check executes ["cerbos", "healthcheck"].
 app.services.add(
     Service(
         name="cerbos",
         image="ghcr.io/cerbos/cerbos:0.45.0",
+        entrypoint=["cerbos"],
+        command=["server", "--config=/dev/null"],
         ports=[
             Port(container=3592, host=3592),
             Port(container=3593, host=3593),

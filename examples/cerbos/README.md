@@ -24,6 +24,18 @@ Ved compiles this directly into the native exec form without shell invocation:
 - **Docker Compose**: `["CMD", "cerbos", "healthcheck"]`
 - **Kubernetes**: `exec.command = ["cerbos", "healthcheck"]`
 
+## Entrypoint & Command Support
+
+Ved supports custom entrypoints and commands for containers:
+
+```python
+entrypoint = ["cerbos"]
+command = ["server", "--config=/dev/null"]
+```
+
+- **Docker Compose**: Emitted as `entrypoint: ["cerbos"]` and `command: ["server", "--config=/dev/null"]`.
+- **Kubernetes**: Emitted as `command: ["cerbos"]` and `args: ["server", "--config=/dev/null"]`.
+
 ## Compilation
 
 ```bash

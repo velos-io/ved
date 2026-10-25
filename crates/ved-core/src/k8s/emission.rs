@@ -161,15 +161,7 @@ pub(super) fn build_service_manifest(
         ("imagePullPolicy", YamlNode::scalar("IfNotPresent")),
         ("envFrom", env_from(name, !svc.env.is_empty())),
     ];
-    if let Some(command) = typed.command() {
-        let args = match command {
-            crate::model::CommandSpec::List(args) => args.clone(),
-            crate::model::CommandSpec::String(command) => {
-                vec!["sh".into(), "-c".into(), command.clone()]
-            }
-        };
-        container.push(("command", strings(args)));
-    }
+    push_container_command_and_args(&mut container, typed);
     if !ports.is_empty() {
         container.push((
             "ports",
@@ -433,15 +425,7 @@ pub(super) fn build_job_manifest(
         ),
         ("imagePullPolicy", YamlNode::scalar("IfNotPresent")),
     ];
-    if let Some(command) = typed.command() {
-        let args = match command {
-            crate::model::CommandSpec::List(args) => args.clone(),
-            crate::model::CommandSpec::String(command) => {
-                vec!["sh".into(), "-c".into(), command.clone()]
-            }
-        };
-        container.push(("command", strings(args)));
-    }
+    push_container_command_and_args(&mut container, typed);
     container.push(("envFrom", env_from(name, !job.env.is_empty())));
     if !mounts.is_empty() {
         container.push(("volumeMounts", YamlNode::sequence(mounts)));
@@ -498,4 +482,40 @@ pub(super) fn build_job_manifest(
     };
     docs.push(doc);
     render_docs(&docs)
+}
+
+fn push_container_command_and_args(
+    container: &mut Vec<(&'static str, YamlNode)>,
+    typed: &crate::validated::ValidatedWorkload,
+) {
+    if let Some(entrypoint) = typed.entrypoint() {
+        let entrypoint_args = entrypoint.to_args();
+        let is_shell_c =
+            entrypoint_args.len() >= 2 && entrypoint_args[entrypoint_args.len() - 1] == "-c";
+        container.push(("command", strings(entrypoint_args)));
+
+        if let Some(command) = typed.command() {
+            let cmd_args = match command {
+                crate::model::CommandSpec::List(args) => args.clone(),
+                crate::model::CommandSpec::String(s) => {
+                    if is_shell_c {
+                        vec![s.clone()]
+                    } else {
+                        command.to_args()
+                    }
+                }
+            };
+            if !cmd_args.is_empty() {
+                container.push(("args", strings(cmd_args)));
+            }
+        }
+    } else if let Some(command) = typed.command() {
+        let args = match command {
+            crate::model::CommandSpec::List(args) => args.clone(),
+            crate::model::CommandSpec::String(command) => {
+                vec!["sh".into(), "-c".into(), command.clone()]
+            }
+        };
+        container.push(("command", strings(args)));
+    }
 }

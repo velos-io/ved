@@ -42,6 +42,8 @@ pub struct ComposeService {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub build: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub networks: Option<Vec<String>>,
@@ -311,6 +313,10 @@ fn build_compose_service_typed(
     workload: &ValidatedWorkload,
     ingress_suffix: Option<&str>,
 ) -> ComposeService {
+    let entrypoint = workload.entrypoint().and_then(|cmd| {
+        let v = format_command_value(cmd);
+        (v != Value::Null).then_some(v)
+    });
     let command = workload.command().and_then(|cmd| {
         let v = format_command_value(cmd);
         (v != Value::Null).then_some(v)
@@ -345,6 +351,7 @@ fn build_compose_service_typed(
         depends_on,
         restart,
         build,
+        entrypoint,
         command,
         networks,
         profiles,
@@ -378,6 +385,10 @@ fn build_compose_job_typed(
     profile_name: Option<&str>,
     workload: &ValidatedWorkload,
 ) -> ComposeService {
+    let entrypoint = workload.entrypoint().and_then(|cmd| {
+        let v = format_command_value(cmd);
+        (v != Value::Null).then_some(v)
+    });
     let command = workload.command().and_then(|cmd| {
         let v = format_command_value(cmd);
         (v != Value::Null).then_some(v)
@@ -401,6 +412,7 @@ fn build_compose_job_typed(
         depends_on,
         restart,
         build: None,
+        entrypoint,
         command,
         networks,
         profiles,
@@ -1247,6 +1259,43 @@ mod tests {
                 Value::String("CMD".to_string()),
                 Value::String("cerbos".to_string()),
                 Value::String("healthcheck".to_string()),
+            ])
+        );
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn test_compose_entrypoint_support() {
+        let mut spec = AppSpec {
+            app: "entrypoint-test".to_string(),
+            ..Default::default()
+        };
+        let svc = ServiceSpec {
+            image: Some("alpine:latest".to_string()),
+            entrypoint: Some(serde_json::json!([
+                "/bin/custom-entrypoint.sh",
+                "--verbose"
+            ])),
+            command: Some(serde_json::json!(["run", "server"])),
+            ..Default::default()
+        };
+        spec.services.insert("custom".to_string(), svc);
+
+        let compose = generate_compose(&spec).expect("compose yaml");
+        let parsed: Value = serde_yaml::from_str(&compose).expect("valid yaml");
+        let service = &parsed["services"]["custom"];
+        assert_eq!(
+            service["entrypoint"],
+            Value::Sequence(vec![
+                Value::String("/bin/custom-entrypoint.sh".to_string()),
+                Value::String("--verbose".to_string()),
+            ])
+        );
+        assert_eq!(
+            service["command"],
+            Value::Sequence(vec![
+                Value::String("run".to_string()),
+                Value::String("server".to_string()),
             ])
         );
     }

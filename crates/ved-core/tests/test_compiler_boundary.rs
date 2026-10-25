@@ -63,7 +63,7 @@ fn facade_loads_all_formats_and_compiles_validated_snapshots() {
 fn every_public_emitter_rejects_bad_fields_before_output_creation() {
     let output = std::env::temp_dir().join(format!("ved-invalid-boundary-{}", std::process::id()));
     let _ = fs::remove_dir_all(&output);
-    for field in ["ports", "command", "mounts", "waitFor"] {
+    for field in ["ports", "entrypoint", "command", "mounts", "waitFor"] {
         let mut spec = AppSpec {
             app: "boundary".into(),
             ..Default::default()
@@ -71,6 +71,7 @@ fn every_public_emitter_rejects_bad_fields_before_output_creation() {
         let mut svc = ServiceSpec::default();
         match field {
             "ports" => svc.ports = vec![serde_json::json!("invalid")],
+            "entrypoint" => svc.entrypoint = Some(serde_json::json!(["init", 1])),
             "command" => svc.command = Some(serde_json::json!(["echo", 1])),
             "mounts" => svc.mounts = vec!["data:relative".into()],
             _ => svc.wait_for = vec!["missing:healthy".into()],
