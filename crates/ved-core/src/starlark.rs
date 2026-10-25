@@ -70,30 +70,48 @@ def Security(capabilities=[], allow_escalation=False, user=None, group=None, fs_
         dropAll = False,
     )
 
-def _health_exec(cmd):
-    return cmd
+def _health_pack(test, interval, timeout, retries, start_period):
+    if interval == None and timeout == None and retries == None and start_period == None:
+        return test
+    d = {"test": test}
+    if interval != None:
+        d["interval"] = interval
+    if timeout != None:
+        d["timeout"] = timeout
+    if retries != None:
+        d["retries"] = retries
+    if start_period != None:
+        d["start_period"] = start_period
+    return d
 
-def _health_tcp(port):
-    return "tcp:{}".format(port)
+def _health_exec(cmd, interval=None, timeout=None, retries=None, start_period=None):
+    return _health_pack(cmd, interval, timeout, retries, start_period)
 
-def _health_http(path="/", port=None):
+def _health_tcp(port, interval=None, timeout=None, retries=None, start_period=None):
+    return _health_pack("tcp:{}".format(port), interval, timeout, retries, start_period)
+
+def _health_http(path="/", port=None, interval=None, timeout=None, retries=None, start_period=None):
     if type(path) == "int":
-        return "http://localhost:{}/".format(path)
-    if str(path).isdigit():
-        return "http://localhost:{}/".format(path)
-    if path.startswith("http://") or path.startswith("https://"):
-        return path
-    if path.startswith("localhost:") or path.startswith("127.0.0.1:"):
-        return "http://" + path
-    clean_path = path if path.startswith("/") else "/" + path
-    if port != None:
-        return "http://localhost:{}{}".format(port, clean_path)
-    return clean_path
+        p = "http://localhost:{}/".format(path)
+    elif str(path).isdigit():
+        p = "http://localhost:{}/".format(path)
+    elif path.startswith("http://") or path.startswith("https://"):
+        p = path
+    elif path.startswith("localhost:") or path.startswith("127.0.0.1:"):
+        p = "http://" + path
+    else:
+        clean_path = path if path.startswith("/") else "/" + path
+        if port != None:
+            p = "http://localhost:{}{}".format(port, clean_path)
+        else:
+            p = clean_path
+    return _health_pack(p, interval, timeout, retries, start_period)
 
 Health = struct(
     exec = _health_exec,
     tcp = _health_tcp,
     http = _health_http,
+    check = _health_pack,
 )
 
 def Ingress(host="app", path="/"):
@@ -154,6 +172,11 @@ def Service(
     enabled=None,
     entrypoint=None,
     command=None,
+    container_name=None,
+    profiles=[],
+    deploy=None,
+    shm_size=None,
+    ulimits=None,
 ):
     norm_wait = [_normalize_wait(w) for w in wait_for]
     act_enabled = _is_enabled(name, enabled)
@@ -175,6 +198,11 @@ def Service(
         enabled=act_enabled,
         entrypoint=entrypoint,
         command=command,
+        container_name=container_name,
+        profiles=profiles,
+        deploy=deploy,
+        shm_size=shm_size,
+        ulimits=ulimits,
     )
 
 def Job(
@@ -191,6 +219,11 @@ def Job(
     restart=None,
     when=None,
     enabled=None,
+    container_name=None,
+    profiles=[],
+    deploy=None,
+    shm_size=None,
+    ulimits=None,
 ):
     norm_wait = [_normalize_wait(w) for w in wait_for]
     act_enabled = _is_enabled(name, enabled)
@@ -208,6 +241,11 @@ def Job(
         restart=restart,
         when=when,
         enabled=act_enabled,
+        container_name=container_name,
+        profiles=profiles,
+        deploy=deploy,
+        shm_size=shm_size,
+        ulimits=ulimits,
     )
 
 def App(name, version, network="default", ingress_suffix=None, env_files=None, config_dir=None):
@@ -305,6 +343,11 @@ def _stack_services_to_dict(services):
             "enabled": s.enabled,
             "entrypoint": s.entrypoint,
             "command": s.command,
+            "container_name": s.container_name,
+            "profiles": s.profiles,
+            "deploy": s.deploy,
+            "shm_size": s.shm_size,
+            "ulimits": s.ulimits,
         }
     return res
 
@@ -328,6 +371,11 @@ def _app_to_spec(app):
             "enabled": s.enabled,
             "entrypoint": s.entrypoint,
             "command": s.command,
+            "container_name": s.container_name,
+            "profiles": s.profiles,
+            "deploy": s.deploy,
+            "shm_size": s.shm_size,
+            "ulimits": s.ulimits,
         }
 
     jobs_map = {}
@@ -345,6 +393,11 @@ def _app_to_spec(app):
             "restart": j.restart,
             "when": j.when,
             "enabled": j.enabled,
+            "container_name": j.container_name,
+            "profiles": j.profiles,
+            "deploy": j.deploy,
+            "shm_size": j.shm_size,
+            "ulimits": j.ulimits,
         }
 
     profiles_map = {}
@@ -368,6 +421,11 @@ def _app_to_spec(app):
                 "enabled": s.enabled,
                 "entrypoint": s.entrypoint,
                 "command": s.command,
+                "container_name": s.container_name,
+                "profiles": s.profiles,
+                "deploy": s.deploy,
+                "shm_size": s.shm_size,
+                "ulimits": s.ulimits,
             }
         profiles_map[p_name] = {
             "when": app._profile_when.get(p_name, True),

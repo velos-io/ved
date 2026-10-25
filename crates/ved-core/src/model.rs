@@ -170,6 +170,11 @@ impl Default for ServiceSpec {
             wait_for: Vec::new(),
             restart: None,
             enabled: None,
+            container_name: None,
+            profiles: Vec::new(),
+            deploy: None,
+            shm_size: None,
+            ulimits: None,
         }
     }
 }
@@ -948,6 +953,16 @@ pub struct ServiceSpec {
     pub restart: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default, rename = "container_name", alias = "containerName")]
+    pub container_name: Option<String>,
+    #[serde(default)]
+    pub profiles: Vec<String>,
+    #[serde(default)]
+    pub deploy: Option<serde_json::Value>,
+    #[serde(rename = "shm_size", alias = "shmSize", default)]
+    pub shm_size: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ulimits: Option<serde_json::Value>,
 }
 
 impl ServiceSpec {
@@ -1108,6 +1123,16 @@ pub struct JobSpec {
     pub when: Option<serde_json::Value>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default, rename = "container_name", alias = "containerName")]
+    pub container_name: Option<String>,
+    #[serde(default)]
+    pub profiles: Vec<String>,
+    #[serde(default)]
+    pub deploy: Option<serde_json::Value>,
+    #[serde(rename = "shm_size", alias = "shmSize", default)]
+    pub shm_size: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ulimits: Option<serde_json::Value>,
 }
 
 impl Default for JobSpec {
@@ -1125,6 +1150,11 @@ impl Default for JobSpec {
             restart: None,
             when: None,
             enabled: None,
+            container_name: None,
+            profiles: Vec::new(),
+            deploy: None,
+            shm_size: None,
+            ulimits: None,
         }
     }
 }
@@ -1442,6 +1472,7 @@ mod tests {
             restart: None,
             when: None,
             enabled: None,
+            ..Default::default()
         };
         spec.jobs.insert("migrate".to_string(), job);
         let err = spec.validate().unwrap_err().to_string();

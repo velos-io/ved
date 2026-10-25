@@ -19,8 +19,23 @@ fn test_compile_ved_yaml() {
 
     let compose_str = support::compose(&spec, BTreeMap::new()).expect("Failed to generate compose");
     assert!(compose_str.contains("postgres:16"));
-    assert!(compose_str.contains("container_name: postgres"));
+    assert!(!compose_str.contains("container_name:"));
     assert!(compose_str.contains("demo-net"));
+}
+
+#[test]
+fn test_compile_explicit_container_name() {
+    let mut spec = ved_core::AppSpec::default();
+    spec.services.insert(
+        "postgres".into(),
+        ved_core::ServiceSpec {
+            image: Some("postgres:16".into()),
+            container_name: Some("my-custom-postgres".into()),
+            ..Default::default()
+        },
+    );
+    let compose_str = support::compose(&spec, BTreeMap::new()).expect("Failed to generate compose");
+    assert!(compose_str.contains("container_name: my-custom-postgres"));
 }
 
 #[test]

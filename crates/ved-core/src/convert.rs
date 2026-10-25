@@ -272,6 +272,36 @@ impl StarlarkWriter {
     }
 }
 
+fn yaml_to_expr(v: &Value) -> Expr {
+    match v {
+        Value::Null => Expr::Raw("None".to_string()),
+        Value::Bool(b) => Expr::Bool(*b),
+        Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Expr::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Expr::Raw(format!("{f}"))
+            } else {
+                Expr::Literal(n.to_string())
+            }
+        }
+        Value::String(s) => Expr::Literal(s.clone()),
+        Value::Sequence(seq) => Expr::List(seq.iter().map(yaml_to_expr).collect()),
+        Value::Mapping(map) => {
+            let mut entries = Vec::new();
+            for (k, val) in map {
+                let k_str = match k {
+                    Value::String(s) => s.clone(),
+                    _ => format!("{k:?}"),
+                };
+                entries.push((k_str, yaml_to_expr(val)));
+            }
+            Expr::Dict(entries)
+        }
+        Value::Tagged(tagged) => yaml_to_expr(&tagged.value),
+    }
+}
+
 /// Convert a Docker Compose YAML file into a Starlark Vedfile.
 pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<String> {
     let content = fs::read_to_string(compose_path)?;
@@ -540,15 +570,33 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
             } else if let Some(m) = deps.as_mapping() {
                 for (k, v) in m {
                     if let Some(k_str) = k.as_str() {
-                        let is_healthy = v
+                        let cond = v
                             .get(Value::String("condition".to_string()))
-                            .and_then(|c| c.as_str())
-                            .map(|c| c.contains("healthy"))
-                            .unwrap_or(true);
-                        if is_healthy {
-                            wait_for.push(format!("{k_str}.healthy"));
-                        } else {
-                            wait_for.push(k_str.to_string());
+                            .and_then(|c| c.as_str());
+                        match cond {
+                            Some("service_completed_successfully") => {
+                                wait_for.push(format!("{k_str}.completed"));
+                            }
+                            Some("service_started") => {
+                                wait_for.push(format!("{k_str}.started"));
+                            }
+                            Some("service_healthy") => {
+                                wait_for.push(format!("{k_str}.healthy"));
+                            }
+                            Some(other)
+                                if other.contains("completed") || other.contains("success") =>
+                            {
+                                wait_for.push(format!("{k_str}.completed"));
+                            }
+                            Some(other) if other.contains("started") => {
+                                wait_for.push(format!("{k_str}.started"));
+                            }
+                            Some(other) if other.contains("healthy") => {
+                                wait_for.push(format!("{k_str}.healthy"));
+                            }
+                            _ => {
+                                wait_for.push(k_str.to_string());
+                            }
                         }
                     }
                 }
@@ -560,64 +608,137 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
         }
 
         if let Some(hc) = svc_data.get("healthcheck") {
-            if let Some(test_val) = hc.get("test") {
-                let cmd_str = if let Some(seq) = test_val.as_sequence() {
-                    let parts: Vec<&str> = seq.iter().filter_map(|v| v.as_str()).collect();
-                    if parts.len() > 1 && (parts[0] == "CMD" || parts[0] == "CMD-SHELL") {
-                        parts[1..].join(" ")
-                    } else {
-                        parts.join(" ")
-                    }
-                } else if let Some(s) = test_val.as_str() {
-                    s.to_string()
-                } else {
-                    String::new()
-                };
+            let mut timing_kwargs = Vec::new();
+            if let Some(interval) = hc.get("interval").and_then(|v| v.as_str()) {
+                timing_kwargs.push(("interval".to_string(), Expr::Literal(interval.to_string())));
+            }
+            if let Some(timeout) = hc.get("timeout").and_then(|v| v.as_str()) {
+                timing_kwargs.push(("timeout".to_string(), Expr::Literal(timeout.to_string())));
+            }
+            if let Some(retries) = hc.get("retries").and_then(|v| v.as_i64()) {
+                timing_kwargs.push(("retries".to_string(), Expr::Int(retries)));
+            } else if let Some(retries) = hc.get("retries").and_then(|v| v.as_u64()) {
+                timing_kwargs.push(("retries".to_string(), Expr::Int(retries as i64)));
+            }
+            if let Some(start_period) = hc
+                .get("start_period")
+                .or_else(|| hc.get("startPeriod"))
+                .and_then(|v| v.as_str())
+            {
+                timing_kwargs.push((
+                    "start_period".to_string(),
+                    Expr::Literal(start_period.to_string()),
+                ));
+            }
 
-                if !cmd_str.is_empty() {
-                    if cmd_str.contains("http://localhost") || cmd_str.contains("http://127.0.0.1")
-                    {
-                        let path = extract_http_path(&cmd_str);
-                        svc_kwargs.push((
-                            "health".to_string(),
-                            Expr::Call {
-                                target: "Health.http".to_string(),
-                                args: vec![Expr::Literal(path)],
-                                kwargs: Vec::new(),
-                            },
-                        ));
-                    } else if cmd_str.starts_with("nc -z") || cmd_str.starts_with("tcp:") {
-                        let port_str = cmd_str.split_whitespace().last().unwrap_or("8080");
-                        let port_expr = port_str
-                            .parse::<i64>()
-                            .map(Expr::Int)
-                            .unwrap_or_else(|_| Expr::Raw(port_str.to_string()));
-                        svc_kwargs.push((
-                            "health".to_string(),
-                            Expr::Call {
-                                target: "Health.tcp".to_string(),
-                                args: vec![port_expr],
-                                kwargs: Vec::new(),
-                            },
-                        ));
-                    } else if cmd_str.contains('\n') {
-                        svc_kwargs.push((
-                            "health".to_string(),
-                            Expr::Call {
-                                target: "Health.exec".to_string(),
-                                args: vec![Expr::Multiline(cmd_str)],
-                                kwargs: Vec::new(),
-                            },
-                        ));
-                    } else {
-                        svc_kwargs.push((
-                            "health".to_string(),
-                            Expr::Call {
-                                target: "Health.exec".to_string(),
-                                args: vec![Expr::Literal(cmd_str)],
-                                kwargs: Vec::new(),
-                            },
-                        ));
+            if let Some(test_val) = hc.get("test") {
+                if let Some(seq) = test_val.as_sequence() {
+                    let parts: Vec<&str> = seq.iter().filter_map(|v| v.as_str()).collect();
+                    if !parts.is_empty() {
+                        if parts[0] == "CMD" && parts.len() > 1 {
+                            let list_items: Vec<Expr> = parts[1..]
+                                .iter()
+                                .map(|s| Expr::Literal(s.to_string()))
+                                .collect();
+                            svc_kwargs.push((
+                                "health".to_string(),
+                                Expr::Call {
+                                    target: "Health.exec".to_string(),
+                                    args: vec![Expr::List(list_items)],
+                                    kwargs: timing_kwargs,
+                                },
+                            ));
+                        } else if parts[0] == "CMD-SHELL" && parts.len() > 1 {
+                            let cmd_str = parts[1..].join(" ");
+                            if (cmd_str.starts_with("wget -qO- http://localhost")
+                                || cmd_str.starts_with("wget -qO- http://127.0.0.1"))
+                                && !cmd_str.contains('\n')
+                            {
+                                let path = extract_http_path(&cmd_str);
+                                svc_kwargs.push((
+                                    "health".to_string(),
+                                    Expr::Call {
+                                        target: "Health.http".to_string(),
+                                        args: vec![Expr::Literal(path)],
+                                        kwargs: timing_kwargs,
+                                    },
+                                ));
+                            } else {
+                                let arg_expr = if cmd_str.contains('\n') {
+                                    Expr::Multiline(cmd_str)
+                                } else {
+                                    Expr::Literal(cmd_str)
+                                };
+                                svc_kwargs.push((
+                                    "health".to_string(),
+                                    Expr::Call {
+                                        target: "Health.exec".to_string(),
+                                        args: vec![arg_expr],
+                                        kwargs: timing_kwargs,
+                                    },
+                                ));
+                            }
+                        } else {
+                            let list_items: Vec<Expr> =
+                                parts.iter().map(|s| Expr::Literal(s.to_string())).collect();
+                            svc_kwargs.push((
+                                "health".to_string(),
+                                Expr::Call {
+                                    target: "Health.exec".to_string(),
+                                    args: vec![Expr::List(list_items)],
+                                    kwargs: timing_kwargs,
+                                },
+                            ));
+                        }
+                    }
+                } else if let Some(cmd_str) = test_val.as_str() {
+                    if !cmd_str.is_empty() {
+                        if (cmd_str.starts_with("http://") || cmd_str.starts_with('/'))
+                            && !cmd_str.contains("curl")
+                            && !cmd_str.contains("wget")
+                        {
+                            let path = extract_http_path(cmd_str);
+                            svc_kwargs.push((
+                                "health".to_string(),
+                                Expr::Call {
+                                    target: "Health.http".to_string(),
+                                    args: vec![Expr::Literal(path)],
+                                    kwargs: timing_kwargs,
+                                },
+                            ));
+                        } else if cmd_str.starts_with("nc -z") || cmd_str.starts_with("tcp:") {
+                            let port_str = cmd_str.split_whitespace().last().unwrap_or("8080");
+                            let port_expr = port_str
+                                .parse::<i64>()
+                                .map(Expr::Int)
+                                .unwrap_or_else(|_| Expr::Raw(port_str.to_string()));
+                            svc_kwargs.push((
+                                "health".to_string(),
+                                Expr::Call {
+                                    target: "Health.tcp".to_string(),
+                                    args: vec![port_expr],
+                                    kwargs: timing_kwargs,
+                                },
+                            ));
+                        } else if cmd_str.contains('\n') {
+                            svc_kwargs.push((
+                                "health".to_string(),
+                                Expr::Call {
+                                    target: "Health.exec".to_string(),
+                                    args: vec![Expr::Multiline(cmd_str.to_string())],
+                                    kwargs: timing_kwargs,
+                                },
+                            ));
+                        } else {
+                            svc_kwargs.push((
+                                "health".to_string(),
+                                Expr::Call {
+                                    target: "Health.exec".to_string(),
+                                    args: vec![Expr::Literal(cmd_str.to_string())],
+                                    kwargs: timing_kwargs,
+                                },
+                            ));
+                        }
                     }
                 }
             }
@@ -655,6 +776,42 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
             if !mount_exprs.is_empty() {
                 svc_kwargs.push(("mounts".to_string(), Expr::List(mount_exprs)));
             }
+        }
+
+        if let Some(cname) = svc_data.get("container_name").and_then(|v| v.as_str()) {
+            if !cname.is_empty() {
+                svc_kwargs.push((
+                    "container_name".to_string(),
+                    Expr::Literal(cname.to_string()),
+                ));
+            }
+        }
+
+        if let Some(restart) = svc_data.get("restart").and_then(|v| v.as_str()) {
+            svc_kwargs.push(("restart".to_string(), Expr::Literal(restart.to_string())));
+        }
+
+        if let Some(profs) = svc_data.get("profiles").and_then(|p| p.as_sequence()) {
+            let prof_exprs: Vec<Expr> = profs
+                .iter()
+                .filter_map(|p| p.as_str())
+                .map(|s| Expr::Literal(s.to_string()))
+                .collect();
+            if !prof_exprs.is_empty() {
+                svc_kwargs.push(("profiles".to_string(), Expr::List(prof_exprs)));
+            }
+        }
+
+        if let Some(deploy_val) = svc_data.get("deploy") {
+            svc_kwargs.push(("deploy".to_string(), yaml_to_expr(deploy_val)));
+        }
+
+        if let Some(shm) = svc_data.get("shm_size") {
+            svc_kwargs.push(("shm_size".to_string(), yaml_to_expr(shm)));
+        }
+
+        if let Some(ulimits_val) = svc_data.get("ulimits") {
+            svc_kwargs.push(("ulimits".to_string(), yaml_to_expr(ulimits_val)));
         }
 
         writer.emit_stmt(&Stmt::Expr(Expr::Call {

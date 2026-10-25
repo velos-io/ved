@@ -960,6 +960,7 @@ mod tests {
                 restart: None,
                 when: None,
                 enabled: None,
+                ..Default::default()
             },
         );
 
@@ -1193,6 +1194,7 @@ mod tests {
                 restart: None,
                 when: None,
                 enabled: None,
+                ..Default::default()
             },
         );
 
@@ -1343,7 +1345,7 @@ mod tests {
                 wait_for: vec![],
                 restart: None,
                 when: None,
-                enabled: None,
+                ..Default::default()
             },
         );
 

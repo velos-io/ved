@@ -51,6 +51,12 @@ pub struct ComposeService {
     pub profiles: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub labels: Option<IndexMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deploy: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shm_size: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ulimits: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -302,9 +308,38 @@ pub fn build_compose_job(
     }
 }
 
+pub fn json_to_yaml_value(val: &serde_json::Value) -> serde_yaml::Value {
+    match val {
+        serde_json::Value::Null => serde_yaml::Value::Null,
+        serde_json::Value::Bool(b) => serde_yaml::Value::Bool(*b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                serde_yaml::Value::Number(i.into())
+            } else if let Some(u) = n.as_u64() {
+                serde_yaml::Value::Number(u.into())
+            } else if let Some(f) = n.as_f64() {
+                serde_yaml::Value::Number(f.into())
+            } else {
+                serde_yaml::Value::String(n.to_string())
+            }
+        }
+        serde_json::Value::String(s) => serde_yaml::Value::String(s.clone()),
+        serde_json::Value::Array(arr) => {
+            serde_yaml::Value::Sequence(arr.iter().map(json_to_yaml_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut yaml_map = serde_yaml::Mapping::new();
+            for (k, v) in map {
+                yaml_map.insert(serde_yaml::Value::String(k.clone()), json_to_yaml_value(v));
+            }
+            serde_yaml::Value::Mapping(yaml_map)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_compose_service_typed(
-    name: &str,
+    _name: &str,
     svc: &ServiceSpec,
     spec: &AppSpec,
     active_workloads: &HashSet<String>,
@@ -337,12 +372,15 @@ fn build_compose_service_typed(
         .as_ref()
         .map(|b| Value::Mapping(resolve_build_mapping(b)));
     let networks = Some(vec![spec.network.clone()]);
-    let profiles = build_profiles_value(&svc.group, profile_name);
+    let profiles = build_profiles_value(&svc.group, profile_name, &svc.profiles);
     let labels = build_ingress_labels(svc.ingress.as_deref(), ingress_suffix);
+    let deploy = svc.deploy.as_ref().map(json_to_yaml_value);
+    let shm_size = svc.shm_size.as_ref().map(json_to_yaml_value);
+    let ulimits = svc.ulimits.as_ref().map(json_to_yaml_value);
 
     ComposeService {
         image: svc.image.clone(),
-        container_name: Some(name.to_string()),
+        container_name: svc.container_name.clone(),
         ports,
         env_file,
         environment,
@@ -356,6 +394,9 @@ fn build_compose_service_typed(
         networks,
         profiles,
         labels,
+        deploy,
+        shm_size,
+        ulimits,
     }
 }
 
@@ -385,6 +426,7 @@ fn build_compose_job_typed(
     profile_name: Option<&str>,
     workload: &ValidatedWorkload,
 ) -> ComposeService {
+    let _ = name;
     let entrypoint = workload.entrypoint().and_then(|cmd| {
         let v = format_command_value(cmd);
         (v != Value::Null).then_some(v)
@@ -397,13 +439,16 @@ fn build_compose_job_typed(
     let env_file = build_env_file_value(&spec.env_files);
     let environment = build_env_map(&job.env);
     let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
-    let restart = Some("no".to_string());
+    let restart = job.restart.clone().or_else(|| Some("no".to_string()));
     let networks = Some(vec![spec.network.clone()]);
-    let profiles = build_profiles_value(&job.group, profile_name);
+    let profiles = build_profiles_value(&job.group, profile_name, &job.profiles);
+    let deploy = job.deploy.as_ref().map(json_to_yaml_value);
+    let shm_size = job.shm_size.as_ref().map(json_to_yaml_value);
+    let ulimits = job.ulimits.as_ref().map(json_to_yaml_value);
 
     ComposeService {
         image: Some(job.image.clone()),
-        container_name: Some(name.to_string()),
+        container_name: job.container_name.clone(),
         ports: None,
         env_file,
         environment,
@@ -417,6 +462,9 @@ fn build_compose_job_typed(
         networks,
         profiles,
         labels: None,
+        deploy,
+        shm_size,
+        ulimits,
     }
 }
 
@@ -588,13 +636,28 @@ fn build_depends_on(
     }
 }
 
-fn build_profiles_value(group: &str, profile_name: Option<&str>) -> Option<Vec<String>> {
+fn build_profiles_value(
+    group: &str,
+    profile_name: Option<&str>,
+    service_profiles: &[String],
+) -> Option<Vec<String>> {
     let mut prof_list = Vec::new();
+    for p in service_profiles {
+        if !prof_list.contains(p) {
+            prof_list.push(p.clone());
+        }
+    }
     if let Some(p) = profile_name {
-        prof_list.push(p.to_string());
+        let p_str = p.to_string();
+        if !prof_list.contains(&p_str) {
+            prof_list.push(p_str);
+        }
     }
     if group != "default" && group != "infra" && group != "app" && profile_name != Some(group) {
-        prof_list.push(group.to_string());
+        let g = group.to_string();
+        if !prof_list.contains(&g) {
+            prof_list.push(g);
+        }
     }
     if prof_list.is_empty() {
         None
