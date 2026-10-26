@@ -5,7 +5,7 @@ SPEC   ?= examples/full/Vedfile
 TARGET ?= $(or $(DEPLOYMENT_TARGET),compose)
 OUTPUT ?= $(dir $(SPEC))
 
-.PHONY: all build compile unit-test up down reset clean ps e2e demo smoke-test release sonar
+.PHONY: all build compile unit-test up down reset clean ps e2e demo smoke-test release sonar diff-verify
 
 all: build
 
@@ -56,8 +56,14 @@ e2e:
 sonar:
 	@bash scripts/sonar-scanner.sh
 
+## diff-verify — verify compiled manifest canonical runtime equivalence
+diff-verify:
+	@./vew compile -f $(SPEC) -t compose -o $(OUTPUT)
+	@python3 scripts/canonical-diff.py --source $(OUTPUT)/docker-compose.yml --compiled $(OUTPUT)/docker-compose.yml
+
 ## clean — remove caches and temporary build artifacts
 clean:
 	@find . -type d -name __pycache__ -exec rm -rf {} + 2>/dev/null || true
 	@find . -name "*.pyc" -delete 2>/dev/null || true
 	@rm -rf .pytest_cache
+
