@@ -1584,4 +1584,73 @@ mod checked_port_tests {
             );
         }
     }
+
+    #[test]
+    fn test_service_spec_omission_preservation() {
+        let bare_json = json!({
+            "image": "redis:alpine"
+        });
+        let spec: ServiceSpec = serde_json::from_value(bare_json).unwrap();
+        assert_eq!(spec.image.as_deref(), Some("redis:alpine"));
+        assert!(spec.restart.is_none());
+        assert!(spec.health.is_none());
+        assert!(spec.healthcheck.is_none());
+        assert!(spec.deploy.is_none());
+        assert!(spec.entrypoint.is_none());
+        assert!(spec.command.is_none());
+        assert!(spec.container_name.is_none());
+        assert!(spec.memory.is_none());
+        assert!(spec.ingress.is_none());
+        assert!(spec.ports.is_empty());
+        assert!(spec.mounts.is_empty());
+        assert!(spec.wait_for.is_empty());
+        assert_eq!(spec.group, "default");
+    }
+
+    #[test]
+    fn test_service_spec_explicit_defaults() {
+        let explicit_no = json!({
+            "image": "busybox:latest",
+            "restart": "no"
+        });
+        let spec_no: ServiceSpec = serde_json::from_value(explicit_no).unwrap();
+        assert_eq!(spec_no.restart.as_deref(), Some("no"));
+
+        let explicit_unless_stopped = json!({
+            "image": "busybox:latest",
+            "restart": "unless-stopped"
+        });
+        let spec_stopped: ServiceSpec = serde_json::from_value(explicit_unless_stopped).unwrap();
+        assert_eq!(spec_stopped.restart.as_deref(), Some("unless-stopped"));
+    }
+
+    #[test]
+    fn test_healthcheck_spec_omission_and_explicit_start_period() {
+        let omitted = json!({
+            "test": ["CMD-SHELL", "pg_isready"],
+            "interval": "5s",
+            "timeout": "2s",
+            "retries": 3
+        });
+        let hc_omitted = HealthCheckSpec::from_value(&omitted);
+        assert!(hc_omitted.start_period.is_none());
+        assert_eq!(hc_omitted.interval, "5s");
+        assert_eq!(hc_omitted.timeout, "2s");
+        assert_eq!(hc_omitted.retries, 3);
+
+        let explicit = json!({
+            "test": ["CMD-SHELL", "pg_isready"],
+            "start_period": "45s"
+        });
+        let hc_explicit = HealthCheckSpec::from_value(&explicit);
+        assert_eq!(hc_explicit.start_period.as_deref(), Some("45s"));
+
+        let explicit_camel = json!({
+            "test": ["CMD-SHELL", "pg_isready"],
+            "startPeriod": "15s"
+        });
+        let hc_camel = HealthCheckSpec::from_value(&explicit_camel);
+        assert_eq!(hc_camel.start_period.as_deref(), Some("15s"));
+    }
 }
+
