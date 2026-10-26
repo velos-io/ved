@@ -381,6 +381,31 @@ pub fn root_anchor_mounts(mounts: &[String], root: &Path) -> Vec<String> {
                 return mount.clone();
             }
 
+            if let Some(rest) = trimmed.strip_prefix("long:") {
+                let parts: Vec<&str> = rest.split(':').collect();
+                if parts.len() >= 3 {
+                    let v_type = parts[0];
+                    let src = parts[1];
+                    let dst = parts[2];
+                    let mode = parts.get(3).map(|s| format!(":{s}")).unwrap_or_default();
+                    let is_host_path = v_type == "bind"
+                        || src.starts_with("./")
+                        || src.starts_with("../")
+                        || src.starts_with('/')
+                        || src.contains('/');
+                    if is_host_path && !Path::new(src).is_absolute() {
+                        let rel = src.trim_start_matches("./");
+                        let anchored = if rel.is_empty() || rel == "." {
+                            root.to_path_buf()
+                        } else {
+                            root.join(rel)
+                        };
+                        return format!("long:{}:{}:{}{}", v_type, anchored.display(), dst, mode);
+                    }
+                }
+                return mount.clone();
+            }
+
             let parts: Vec<&str> = trimmed.split(':').collect();
             if parts.len() < 2 || parts.len() > 3 {
                 return mount.clone();

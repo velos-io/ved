@@ -332,19 +332,32 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
             "Service".to_string(),
         ],
     });
+    let mut app_kwargs = vec![
+        ("name".to_string(), Expr::Literal(app_name.to_string())),
+        ("version".to_string(), Expr::Literal("0.1.0".to_string())),
+    ];
+    if let Some(networks_val) = root.get("networks") {
+        if let Some(m) = networks_val.as_mapping() {
+            if let Some((first_net, _)) = m.iter().next() {
+                if let Some(net_name) = first_net.as_str() {
+                    app_kwargs.push(("network".to_string(), Expr::Literal(net_name.to_string())));
+                }
+            }
+        }
+        app_kwargs.push(("networks".to_string(), yaml_to_expr(networks_val)));
+    } else {
+        app_kwargs.push((
+            "network".to_string(),
+            Expr::Literal(format!("{app_name}-net")),
+        ));
+    }
+
     writer.emit_stmt(&Stmt::Assign {
         target: "app".to_string(),
         value: Expr::Call {
             target: "App".to_string(),
             args: Vec::new(),
-            kwargs: vec![
-                ("name".to_string(), Expr::Literal(app_name.to_string())),
-                ("version".to_string(), Expr::Literal("0.1.0".to_string())),
-                (
-                    "network".to_string(),
-                    Expr::Literal(format!("{app_name}-net")),
-                ),
-            ],
+            kwargs: app_kwargs,
         },
     });
 
@@ -482,6 +495,7 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                             kwargs: vec![("host".to_string(), hp_expr)],
                         });
                     } else if parts.len() == 3 {
+                        let ip = parts[0].trim();
                         let hp = parts[1].trim();
                         let cp = parts[2].split('/').next().unwrap_or(parts[2]).trim();
                         let cp_expr = cp
@@ -495,7 +509,10 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                         port_exprs.push(Expr::Call {
                             target: "Port".to_string(),
                             args: vec![cp_expr],
-                            kwargs: vec![("host".to_string(), hp_expr)],
+                            kwargs: vec![
+                                ("host".to_string(), hp_expr),
+                                ("host_ip".to_string(), Expr::Literal(ip.to_string())),
+                            ],
                         });
                     } else if parts.len() == 1 {
                         let cp = parts[0].split('/').next().unwrap_or(parts[0]).trim();
@@ -509,6 +526,38 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                             kwargs: vec![("host".to_string(), cp_expr)],
                         });
                     }
+                } else if let Some(m) = p.as_mapping() {
+                    let target = m
+                        .get(Value::String("target".to_string()))
+                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                        .unwrap_or(80);
+                    let published = m
+                        .get(Value::String("published".to_string()))
+                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
+                    let host_ip = m
+                        .get(Value::String("host_ip".to_string()))
+                        .and_then(|v| v.as_str());
+                    let protocol = m
+                        .get(Value::String("protocol".to_string()))
+                        .and_then(|v| v.as_str());
+
+                    let mut port_kwargs = Vec::new();
+                    if let Some(pub_val) = published {
+                        port_kwargs.push(("host".to_string(), Expr::Int(pub_val)));
+                    }
+                    if let Some(ip) = host_ip {
+                        port_kwargs.push(("host_ip".to_string(), Expr::Literal(ip.to_string())));
+                    }
+                    if let Some(proto) = protocol {
+                        if proto != "tcp" {
+                            port_kwargs.push(("protocol".to_string(), Expr::Literal(proto.to_string())));
+                        }
+                    }
+                    port_exprs.push(Expr::Call {
+                        target: "Port".to_string(),
+                        args: vec![Expr::Int(target)],
+                        kwargs: port_kwargs,
+                    });
                 } else if let Some(n) = p.as_u64() {
                     let n_expr = Expr::Int(n as i64);
                     port_exprs.push(Expr::Call {
@@ -771,6 +820,38 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                             kwargs: Vec::new(),
                         });
                     }
+                } else if let Some(m) = vol.as_mapping() {
+                    let v_type = m
+                        .get(Value::String("type".to_string()))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("volume");
+                    let src = m
+                        .get(Value::String("source".to_string()))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let dst = m
+                        .get(Value::String("target".to_string()))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let read_only = m
+                        .get(Value::String("read_only".to_string()))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !dst.is_empty() {
+                        let mut kwargs = Vec::new();
+                        if read_only {
+                            kwargs.push(("read_only".to_string(), Expr::Bool(true)));
+                        }
+                        mount_exprs.push(Expr::Call {
+                            target: "Mount.long".to_string(),
+                            args: vec![
+                                Expr::Literal(v_type.to_string()),
+                                Expr::Literal(src.to_string()),
+                                Expr::Literal(dst.to_string()),
+                            ],
+                            kwargs,
+                        });
+                    }
                 }
             }
             if !mount_exprs.is_empty() {
@@ -812,6 +893,10 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
 
         if let Some(ulimits_val) = svc_data.get("ulimits") {
             svc_kwargs.push(("ulimits".to_string(), yaml_to_expr(ulimits_val)));
+        }
+
+        if let Some(net_val) = svc_data.get("networks") {
+            svc_kwargs.push(("networks".to_string(), yaml_to_expr(net_val)));
         }
 
         writer.emit_stmt(&Stmt::Expr(Expr::Call {
@@ -1406,5 +1491,73 @@ services:
         );
         let cmd = svc.command.as_ref().unwrap();
         assert_eq!(cmd, &serde_json::json!(["run", "server"]));
+    }
+
+    #[test]
+    fn test_convert_compose_long_form_and_network_contracts() {
+        let yaml = r#"
+name: contract-test
+services:
+  app:
+    image: nginx:alpine
+    ports:
+      - target: 8090
+        published: 18090
+        host_ip: 127.0.0.1
+        protocol: tcp
+    volumes:
+      - type: volume
+        source: store-state
+        target: /data
+    networks:
+      private:
+        aliases:
+          - app
+          - custom-alias
+networks:
+  private:
+    internal: true
+"#;
+        let tmp =
+            std::env::temp_dir().join(format!("compose_contracts_{}.yml", std::process::id()));
+        fs::write(&tmp, yaml).unwrap();
+
+        let starlark = convert_compose_to_ved(&tmp, "contract-test").unwrap();
+        let _ = fs::remove_file(&tmp);
+
+        assert!(starlark.contains("host_ip=\"127.0.0.1\""));
+        assert!(starlark.contains("Mount.long(\"volume\", \"store-state\", \"/data\")"));
+        assert!(starlark.contains("\"internal\": True"));
+        assert!(starlark.contains("\"aliases\": [\"app\", \"custom-alias\"]"));
+
+        let tmp_ved =
+            std::env::temp_dir().join(format!("Vedfile_contracts_{}", std::process::id()));
+        fs::write(&tmp_ved, &starlark).unwrap();
+        let spec = crate::starlark::load_starlark_spec(&tmp_ved)
+            .expect("Failed to evaluate Starlark with contracts");
+        let _ = fs::remove_file(&tmp_ved);
+
+        assert_eq!(spec.network, "private");
+        assert_eq!(
+            spec.networks["private"],
+            serde_json::json!({"internal": true})
+        );
+
+        let svc = &spec.services["app"];
+        assert_eq!(
+            svc.networks,
+            Some(serde_json::json!({"private": {"aliases": ["app", "custom-alias"]}}))
+        );
+        assert_eq!(svc.ports, vec![serde_json::json!("127.0.0.1:18090:8090")]);
+        assert_eq!(svc.mounts, vec!["long:volume:store-state:/data".to_string()]);
+
+        let compose_out = crate::compose::generate_compose(&spec)
+            .expect("generate compose from spec");
+        assert!(compose_out.contains("127.0.0.1:18090:8090"));
+        assert!(compose_out.contains("type: volume"));
+        assert!(compose_out.contains("source: store-state"));
+        assert!(compose_out.contains("target: /data"));
+        assert!(compose_out.contains("internal: true"));
+        assert!(compose_out.contains("custom-alias"));
     }
 }

@@ -33,7 +33,7 @@ pub struct ComposeService {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<IndexMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub volumes: Option<Vec<String>>,
+    pub volumes: Option<Vec<Value>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub healthcheck: Option<ComposeHealthcheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -47,7 +47,7 @@ pub struct ComposeService {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub command: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub networks: Option<Vec<String>>,
+    pub networks: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profiles: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -189,7 +189,18 @@ pub fn generate_compose_validated_with_context(
     }
 
     let mut networks = IndexMap::new();
-    networks.insert(spec.network.clone(), None);
+    if !spec.networks.is_empty() {
+        for (net_name, net_val) in &spec.networks {
+            let val = if net_val.is_null() {
+                None
+            } else {
+                Some(json_to_yaml_value(net_val))
+            };
+            networks.insert(net_name.clone(), val);
+        }
+    } else {
+        networks.insert(spec.network.clone(), None);
+    }
 
     let volumes = build_compose_volumes_validated(validated).map(|vol_map| {
         vol_map
@@ -382,7 +393,7 @@ fn build_compose_service_typed(
         let v = format_command_value(cmd);
         (v != Value::Null).then_some(v)
     });
-    let ports = build_ports_value(workload.ports());
+    let ports = build_ports_value(workload.ports(), &svc.ports);
     let svc_env_files = if let Some(ref ef) = svc.env_file {
         vec![rebase_env_file(ef, root, compose_dir)]
     } else {
@@ -398,7 +409,11 @@ fn build_compose_service_typed(
         .build
         .as_ref()
         .map(|b| Value::Mapping(resolve_build_mapping(b)));
-    let networks = Some(vec![spec.network.clone()]);
+    let networks = if let Some(ref svc_nets) = svc.networks {
+        Some(json_to_yaml_value(svc_nets))
+    } else {
+        Some(Value::Sequence(vec![Value::String(spec.network.clone())]))
+    };
     let profiles = build_profiles_value(&svc.group, profile_name, &svc.profiles);
     let labels = build_ingress_labels(svc.ingress.as_deref(), ingress_suffix);
     let deploy = svc.deploy.as_ref().map(json_to_yaml_value);
@@ -469,7 +484,11 @@ fn build_compose_job_typed(
     let environment = build_env_map(&job.env);
     let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
     let restart = job.restart.clone().or_else(|| Some("no".to_string()));
-    let networks = Some(vec![spec.network.clone()]);
+    let networks = if let Some(ref job_nets) = job.networks {
+        Some(json_to_yaml_value(job_nets))
+    } else {
+        Some(Value::Sequence(vec![Value::String(spec.network.clone())]))
+    };
     let profiles = build_profiles_value(&job.group, profile_name, &job.profiles);
     let deploy = job.deploy.as_ref().map(json_to_yaml_value);
     let shm_size = job.shm_size.as_ref().map(json_to_yaml_value);
@@ -595,7 +614,44 @@ fn build_health_test_seq(cmd: &str, ports: &[PortSpec]) -> Vec<String> {
     test_seq
 }
 
-fn build_ports_value(ports: &[PortSpec]) -> Option<Vec<String>> {
+fn build_ports_value(ports: &[PortSpec], raw_ports: &[serde_json::Value]) -> Option<Vec<String>> {
+    if !raw_ports.is_empty() {
+        let mut result = Vec::new();
+        for p in raw_ports {
+            if let Some(s) = p.as_str() {
+                result.push(s.to_string());
+            } else if let Some(n) = p.as_u64() {
+                result.push(format!("{}:{}", n, n));
+            } else if let Some(map) = p.as_object() {
+                let target = map.get("target").and_then(|v| v.as_u64());
+                let published = map.get("published").and_then(|v| v.as_u64());
+                let host_ip = map.get("host_ip").and_then(|v| v.as_str());
+                let proto = map.get("protocol").and_then(|v| v.as_str());
+                let proto_suffix = match proto {
+                    Some(pr) if pr != "tcp" => format!("/{}", pr),
+                    _ => String::new(),
+                };
+                match (host_ip, published, target) {
+                    (Some(ip), Some(pub_p), Some(tgt)) => {
+                        result.push(format!("{}:{}:{}{}", ip, pub_p, tgt, proto_suffix));
+                    }
+                    (None, Some(pub_p), Some(tgt)) => {
+                        result.push(format!("{}:{}{}", pub_p, tgt, proto_suffix));
+                    }
+                    (Some(ip), None, Some(tgt)) => {
+                        result.push(format!("{}:{}:{}{}", ip, tgt, tgt, proto_suffix));
+                    }
+                    (None, None, Some(tgt)) => {
+                        result.push(format!("{}:{}{}", tgt, tgt, proto_suffix));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if !result.is_empty() {
+            return Some(result);
+        }
+    }
     (!ports.is_empty()).then(|| {
         ports
             .iter()
@@ -675,8 +731,44 @@ fn build_env_map(env: &IndexMap<String, serde_json::Value>) -> Option<IndexMap<S
     Some(env_map)
 }
 
-fn build_mounts_value(mounts: &[MountSpec]) -> Option<Vec<String>> {
-    (!mounts.is_empty()).then(|| mounts.iter().map(|m| m.raw.clone()).collect())
+fn build_mounts_value(mounts: &[MountSpec]) -> Option<Vec<Value>> {
+    (!mounts.is_empty()).then(|| {
+        mounts
+            .iter()
+            .map(|m| {
+                if let Some(rest) = m.raw.strip_prefix("long:") {
+                    let parts: Vec<&str> = rest.split(':').collect();
+                    let v_type = parts.first().copied().unwrap_or("volume");
+                    let src = parts.get(1).copied().unwrap_or(&m.host_or_volume);
+                    let dst = parts.get(2).copied().unwrap_or(&m.container_path);
+                    let read_only = parts.get(3).map(|&s| s == "ro").unwrap_or(m.read_only);
+
+                    let mut map = serde_yaml::Mapping::new();
+                    map.insert(
+                        Value::String("type".to_string()),
+                        Value::String(v_type.to_string()),
+                    );
+                    map.insert(
+                        Value::String("source".to_string()),
+                        Value::String(src.to_string()),
+                    );
+                    map.insert(
+                        Value::String("target".to_string()),
+                        Value::String(dst.to_string()),
+                    );
+                    if read_only {
+                        map.insert(
+                            Value::String("read_only".to_string()),
+                            Value::Bool(true),
+                        );
+                    }
+                    Value::Mapping(map)
+                } else {
+                    Value::String(m.raw.clone())
+                }
+            })
+            .collect()
+    })
 }
 
 fn build_depends_on(
@@ -753,18 +845,29 @@ pub fn build_compose_networks(network: &str) -> Mapping {
 }
 
 pub fn extract_volume(m: &str) -> Option<String> {
-    let parts: Vec<&str> = m.split(':').collect();
-    if parts.len() >= 2 {
-        let src = parts[0].trim();
-        if !src.is_empty()
-            && !src.starts_with('.')
-            && !src.starts_with('/')
-            && !src.starts_with('~')
-            && !src.contains('/')
-            && !src.contains('\\')
-        {
-            return Some(src.to_string());
+    let clean = if let Some(rest) = m.strip_prefix("long:") {
+        let parts: Vec<&str> = rest.split(':').collect();
+        if parts.first().copied() == Some("volume") && parts.len() >= 2 {
+            parts[1].trim()
+        } else {
+            return None;
         }
+    } else {
+        let parts: Vec<&str> = m.split(':').collect();
+        if parts.len() >= 2 {
+            parts[0].trim()
+        } else {
+            return None;
+        }
+    };
+    if !clean.is_empty()
+        && !clean.starts_with('.')
+        && !clean.starts_with('/')
+        && !clean.starts_with('~')
+        && !clean.contains('/')
+        && !clean.contains('\\')
+    {
+        return Some(clean.to_string());
     }
     None
 }

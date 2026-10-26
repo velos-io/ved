@@ -37,18 +37,28 @@ def _mount_ro(src, dst):
 def _mount_bind(src, dst):
     return "{}:{}".format(src, dst)
 
+def _mount_long(type, source, target, read_only=False):
+    ro_suffix = ":ro" if read_only else ""
+    return "long:{}:{}:{}{}".format(type, source, target, ro_suffix)
+
 Mount = struct(
     volume = _mount_volume,
     ro = _mount_ro,
     bind = _mount_bind,
+    long = _mount_long,
 )
 
-def Port(target=None, container=None, host=None):
+def Port(target=None, container=None, host=None, host_ip=None, protocol=None):
     c = container if container != None else target
+    proto_suffix = "/{}".format(protocol) if protocol != None and protocol != "tcp" else ""
+    if host_ip != None and host != None and c != None:
+        return "{}:{}:{}{}".format(host_ip, host, c, proto_suffix)
+    if host_ip != None and c != None:
+        return "{}:{}:{}{}".format(host_ip, c, c, proto_suffix)
     if host != None and c != None:
-        return "{}:{}".format(host, c)
+        return "{}:{}{}".format(host, c, proto_suffix)
     if c != None:
-        return "{}:{}".format(c, c)
+        return "{}:{}{}".format(c, c, proto_suffix)
     return ""
 
 def _sec_drop_all():
@@ -177,6 +187,7 @@ def Service(
     deploy=None,
     shm_size=None,
     ulimits=None,
+    networks=None,
 ):
     norm_wait = [_normalize_wait(w) for w in wait_for]
     act_enabled = _is_enabled(name, enabled)
@@ -203,6 +214,7 @@ def Service(
         deploy=deploy,
         shm_size=shm_size,
         ulimits=ulimits,
+        networks=networks,
     )
 
 def Job(
@@ -248,7 +260,7 @@ def Job(
         ulimits=ulimits,
     )
 
-def App(name, version, network="default", ingress_suffix=None, env_files=None, config_dir=None):
+def App(name, version, network="default", ingress_suffix=None, env_files=None, config_dir=None, networks=None):
     cli_cfg = ved_get_env("VED_CONFIG_DIR", "")
     if cli_cfg != "":
         config_dir = cli_cfg
@@ -309,6 +321,7 @@ def App(name, version, network="default", ingress_suffix=None, env_files=None, c
         app = name,
         version = version,
         network = network,
+        networks = networks if networks != None else {},
         ingress = ingress_suffix,
         config_dir = config_dir,
         env_files = env_files,
@@ -348,6 +361,7 @@ def _stack_services_to_dict(services):
             "deploy": s.deploy,
             "shm_size": s.shm_size,
             "ulimits": s.ulimits,
+            "networks": s.networks,
         }
     return res
 
@@ -376,6 +390,7 @@ def _app_to_spec(app):
             "deploy": s.deploy,
             "shm_size": s.shm_size,
             "ulimits": s.ulimits,
+            "networks": s.networks,
         }
 
     jobs_map = {}
@@ -426,6 +441,7 @@ def _app_to_spec(app):
                 "deploy": s.deploy,
                 "shm_size": s.shm_size,
                 "ulimits": s.ulimits,
+                "networks": s.networks,
             }
         profiles_map[p_name] = {
             "when": app._profile_when.get(p_name, True),
@@ -437,6 +453,7 @@ def _app_to_spec(app):
         "app": app.app,
         "version": app.version,
         "network": app.network,
+        "networks": app.networks,
         "ingress": app.ingress,
         "configDir": app.config_dir,
         "envFiles": list(app.env_files),

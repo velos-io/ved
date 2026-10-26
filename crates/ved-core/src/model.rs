@@ -10,6 +10,8 @@ pub struct AppSpec {
     #[serde(default = "default_network")]
     pub network: String,
     #[serde(default)]
+    pub networks: IndexMap<String, serde_json::Value>,
+    #[serde(default)]
     pub ingress: Option<String>,
     #[serde(
         default = "default_config_dir",
@@ -145,6 +147,7 @@ impl Default for AppSpec {
             profiles: IndexMap::new(),
             tasks: IndexMap::new(),
             stacks: Vec::new(),
+            networks: IndexMap::new(),
         }
     }
 }
@@ -175,6 +178,7 @@ impl Default for ServiceSpec {
             deploy: None,
             shm_size: None,
             ulimits: None,
+            networks: None,
         }
     }
 }
@@ -248,33 +252,61 @@ impl PortSpec {
                 input: s.to_string(),
             });
         }
-        if let Some((host_part, container_part)) = trimmed.split_once(':') {
-            if container_part.contains(':') {
-                return Err(PortParseError::InvalidSpec {
-                    input: s.to_string(),
-                });
+        let parts: Vec<&str> = trimmed.split(':').collect();
+        match parts.len() {
+            1 => {
+                let port_part = parts[0].split('/').next().unwrap_or(parts[0]).trim();
+                let port = port_part
+                    .parse::<u16>()
+                    .map_err(|source| PortParseError::InvalidPort {
+                        input: trimmed.to_string(),
+                        source,
+                    })?;
+                Ok(Self::single(port))
             }
-            let host = host_part
-                .parse::<u16>()
-                .map_err(|source| PortParseError::InvalidHost {
-                    input: host_part.to_string(),
-                    source,
+            2 => {
+                let host_part = parts[0].trim();
+                let container_part = parts[1].split('/').next().unwrap_or(parts[1]).trim();
+                let host = host_part
+                    .parse::<u16>()
+                    .map_err(|source| PortParseError::InvalidHost {
+                        input: host_part.to_string(),
+                        source,
+                    })?;
+                let container = container_part.parse::<u16>().map_err(|source| {
+                    PortParseError::InvalidContainer {
+                        input: container_part.to_string(),
+                        source,
+                    }
                 })?;
-            let container = container_part.parse::<u16>().map_err(|source| {
-                PortParseError::InvalidContainer {
-                    input: container_part.to_string(),
-                    source,
+                Ok(Self { host, container })
+            }
+            3 => {
+                let ip_part = parts[0].trim();
+                if !ip_part.contains('.') && ip_part != "localhost" {
+                    return Err(PortParseError::InvalidSpec {
+                        input: s.to_string(),
+                    });
                 }
-            })?;
-            Ok(Self { host, container })
-        } else {
-            let port = trimmed
-                .parse::<u16>()
-                .map_err(|source| PortParseError::InvalidPort {
-                    input: trimmed.to_string(),
-                    source,
+                let host_part = parts[1].trim();
+                let container_part = parts[2].split('/').next().unwrap_or(parts[2]).trim();
+                let host = host_part
+                    .parse::<u16>()
+                    .map_err(|source| PortParseError::InvalidHost {
+                        input: host_part.to_string(),
+                        source,
+                    })?;
+                let container = container_part.parse::<u16>().map_err(|source| {
+                    PortParseError::InvalidContainer {
+                        input: container_part.to_string(),
+                        source,
+                    }
                 })?;
-            Ok(Self::single(port))
+                Ok(Self { host, container })
+            }
+            _ => Err(PortParseError::InvalidSpec {
+                input: s.to_string(),
+            }),
         }
     }
 }
@@ -351,7 +383,21 @@ impl TryFrom<serde_json::Value> for PortSpec {
                 Ok(Self::single(p as u16))
             }
             serde_json::Value::String(s) => Self::parse(&s).map_err(|e| e.to_string()),
-            _ => Err("port must be an integer or string".to_string()),
+            serde_json::Value::Object(map) => {
+                let target = map
+                    .get("target")
+                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .ok_or_else(|| "missing target in port mapping".to_string())?;
+                let published = map
+                    .get("published")
+                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .unwrap_or(target);
+                if target > u16::MAX as u64 || published > u16::MAX as u64 {
+                    return Err("port number exceeds maximum u16".to_string());
+                }
+                Ok(Self::new(published as u16, target as u16))
+            }
+            _ => Err("port must be an integer, string, or mapping".to_string()),
         }
     }
 }
@@ -711,6 +757,54 @@ pub fn is_valid_dns1123_label(name: &str) -> bool {
 impl MountSpec {
     pub fn parse(s: &str) -> Result<Self, VedError> {
         let trimmed = s.trim();
+        if let Some(r) = trimmed.strip_prefix("long:") {
+            let parts: Vec<&str> = r.split(':').collect();
+            if parts.len() < 3 || parts.len() > 4 {
+                return Err(VedError::spec_parse(
+                    "",
+                    "Long-form mount string must contain 3 or 4 colon-separated segments",
+                ));
+            }
+            let v_type = parts[0];
+            let src = parts[1];
+            let dst = parts[2];
+            let read_only = parts.get(3).map(|&m| m == "ro").unwrap_or(false);
+            if dst.is_empty() || !dst.starts_with('/') {
+                return Err(VedError::spec_parse(
+                    "",
+                    "Mount destination must be an absolute path starting with '/'",
+                ));
+            }
+            let kind = if v_type == "bind" || src.starts_with("./") || src.starts_with('/') {
+                let volume_name = sanitize_volume_name(src);
+                MountKind::HostPath {
+                    volume_name,
+                    host_path: src.to_string(),
+                    mount_path: dst.to_string(),
+                    read_only,
+                }
+            } else {
+                if !is_valid_dns1123_label(src) {
+                    return Err(VedError::spec_parse(
+                        "",
+                        format!("PVC claim name '{src}' must be a valid DNS-1123 label"),
+                    ));
+                }
+                MountKind::PersistentVolumeClaim {
+                    claim_name: src.to_string(),
+                    mount_path: dst.to_string(),
+                    read_only,
+                }
+            };
+            return Ok(Self {
+                raw: trimmed.to_string(),
+                host_or_volume: src.to_string(),
+                container_path: dst.to_string(),
+                read_only,
+                kind,
+            });
+        }
+
         let (is_cm, rest) = if let Some(r) = trimmed.strip_prefix("cm:") {
             (true, r)
         } else if let Some(r) = trimmed.strip_prefix("configmap:") {
@@ -959,6 +1053,8 @@ pub struct ServiceSpec {
     pub shm_size: Option<serde_json::Value>,
     #[serde(default)]
     pub ulimits: Option<serde_json::Value>,
+    #[serde(default)]
+    pub networks: Option<serde_json::Value>,
 }
 
 impl ServiceSpec {
@@ -1129,6 +1225,8 @@ pub struct JobSpec {
     pub shm_size: Option<serde_json::Value>,
     #[serde(default)]
     pub ulimits: Option<serde_json::Value>,
+    #[serde(default)]
+    pub networks: Option<serde_json::Value>,
 }
 
 impl Default for JobSpec {
@@ -1151,6 +1249,7 @@ impl Default for JobSpec {
             deploy: None,
             shm_size: None,
             ulimits: None,
+            networks: None,
         }
     }
 }

@@ -288,6 +288,7 @@ fn parse_shorthand_unchecked(input: &str) -> Result<AppSpec> {
         profiles: IndexMap::new(),
         tasks: IndexMap::new(),
         stacks,
+        networks: IndexMap::new(),
     })
 }
 
