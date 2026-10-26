@@ -45,6 +45,10 @@ pub mod keys {
     pub const OTEL_ENABLED: &str = "OTEL_ENABLED";
 }
 
+pub mod defaults {
+    pub const COMPOSE_PATH: &str = ".ved/docker-compose.yml";
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -93,5 +97,10 @@ mod tests {
         assert_eq!(keys::VED_K8S_NAMESPACE, "VED_K8S_NAMESPACE");
         assert_eq!(keys::TARGET, "TARGET");
         assert_eq!(keys::OTEL_ENABLED, "OTEL_ENABLED");
+    }
+
+    #[test]
+    fn test_defaults_constants_stability() {
+        assert_eq!(defaults::COMPOSE_PATH, ".ved/docker-compose.yml");
     }
 }

@@ -5,6 +5,7 @@ use serde::Serialize;
 use serde_yaml::{Mapping, Value};
 
 use std::collections::{BTreeSet, HashSet};
+use std::path::{Path, PathBuf};
 
 use crate::model::{
     AppSpec, CommandSpec, HealthCheckSpec, JobSpec, MountSpec, PortSpec, ServiceSpec,
@@ -102,6 +103,14 @@ pub fn generate_compose_validated_with_context(
     let (active_workloads, healthy_workloads) = collect_active_workloads(spec);
     let mut services = IndexMap::new();
 
+    let compose_file_path = context.compose_file_path();
+    let compose_dir = compose_file_path.parent().unwrap_or_else(|| context.root());
+    let effective_env_files: Vec<String> = spec
+        .env_files
+        .iter()
+        .map(|f| rebase_env_file(f, context.root(), compose_dir))
+        .collect();
+
     for (name, svc) in &spec.services {
         if svc.enabled.unwrap_or(true) {
             let service = build_compose_service_typed(
@@ -115,6 +124,9 @@ pub fn generate_compose_validated_with_context(
                     .workload(None, name)
                     .expect("validated service cache"),
                 Some(&ingress_suffix),
+                &effective_env_files,
+                context.root(),
+                compose_dir,
             );
             services.insert(name.clone(), service);
         }
@@ -130,6 +142,7 @@ pub fn generate_compose_validated_with_context(
                 &healthy_workloads,
                 None,
                 validated.workload(None, name).expect("validated job cache"),
+                &effective_env_files,
             );
             services.insert(name.clone(), job_svc);
         }
@@ -149,6 +162,9 @@ pub fn generate_compose_validated_with_context(
                         .workload(Some(prof_name), name)
                         .expect("validated service cache"),
                     Some(&ingress_suffix),
+                    &effective_env_files,
+                    context.root(),
+                    compose_dir,
                 );
                 services.insert(name.clone(), service);
             }
@@ -165,6 +181,7 @@ pub fn generate_compose_validated_with_context(
                     validated
                         .workload(Some(prof_name), name)
                         .expect("validated job cache"),
+                    &effective_env_files,
                 );
                 services.insert(name.clone(), job_svc);
             }
@@ -253,6 +270,7 @@ pub fn build_compose_service(
     let workload = validated
         .workload(profile_name, name)
         .expect("validated workload cache");
+    let empty_root = Path::new(".");
     let svc = build_compose_service_typed(
         name,
         value,
@@ -262,6 +280,9 @@ pub fn build_compose_service(
         profile_name,
         workload,
         None,
+        &validated.as_spec().env_files,
+        empty_root,
+        empty_root,
     );
     match serde_yaml::to_value(&svc)? {
         Value::Mapping(m) => Ok(m),
@@ -302,6 +323,7 @@ pub fn build_compose_job(
         healthy_workloads,
         profile_name,
         workload,
+        &validated.as_spec().env_files,
     );
     match serde_yaml::to_value(&job)? {
         Value::Mapping(m) => Ok(m),
@@ -348,6 +370,9 @@ fn build_compose_service_typed(
     profile_name: Option<&str>,
     workload: &ValidatedWorkload,
     ingress_suffix: Option<&str>,
+    effective_env_files: &[String],
+    root: &Path,
+    compose_dir: &Path,
 ) -> ComposeService {
     let entrypoint = workload.entrypoint().and_then(|cmd| {
         let v = format_command_value(cmd);
@@ -358,7 +383,12 @@ fn build_compose_service_typed(
         (v != Value::Null).then_some(v)
     });
     let ports = build_ports_value(workload.ports());
-    let env_file = build_env_file_value(&spec.env_files);
+    let svc_env_files = if let Some(ref ef) = svc.env_file {
+        vec![rebase_env_file(ef, root, compose_dir)]
+    } else {
+        effective_env_files.to_vec()
+    };
+    let env_file = build_env_file_value(&svc_env_files);
     let environment = build_env_map(&svc.env);
     let volumes = build_mounts_value(workload.mounts());
     let healthcheck = build_compose_healthcheck_typed(svc, workload.ports());
@@ -414,6 +444,7 @@ fn build_ingress_labels(
     Some(labels)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_compose_job_typed(
     name: &str,
     job: &JobSpec,
@@ -422,6 +453,7 @@ fn build_compose_job_typed(
     healthy_workloads: &HashSet<String>,
     profile_name: Option<&str>,
     workload: &ValidatedWorkload,
+    effective_env_files: &[String],
 ) -> ComposeService {
     let _ = name;
     let entrypoint = workload.entrypoint().and_then(|cmd| {
@@ -433,7 +465,7 @@ fn build_compose_job_typed(
         (v != Value::Null).then_some(v)
     });
     let volumes = build_mounts_value(workload.mounts());
-    let env_file = build_env_file_value(&spec.env_files);
+    let env_file = build_env_file_value(effective_env_files);
     let environment = build_env_map(&job.env);
     let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
     let restart = job.restart.clone().or_else(|| Some("no".to_string()));
@@ -574,6 +606,56 @@ fn build_ports_value(ports: &[PortSpec]) -> Option<Vec<String>> {
 
 fn build_env_file_value(env_files: &[String]) -> Option<Vec<String>> {
     (!env_files.is_empty()).then(|| env_files.to_vec())
+}
+
+/// Computes a relative path from `from` directory to `to` path.
+/// If `to` cannot be expressed relative to `from` (e.g. distinct filesystem roots),
+/// returns `to` unchanged.
+pub fn diff_paths(to: &Path, from: &Path) -> PathBuf {
+    use std::path::Component;
+
+    let to_components: Vec<Component> = to.components().collect();
+    let from_components: Vec<Component> = from.components().collect();
+
+    let mut common_len = 0;
+    while common_len < to_components.len()
+        && common_len < from_components.len()
+        && to_components[common_len] == from_components[common_len]
+    {
+        common_len += 1;
+    }
+
+    if common_len == 0 && !to_components.is_empty() && !from_components.is_empty() {
+        return to.to_path_buf();
+    }
+
+    let mut result = PathBuf::new();
+    for c in &from_components[common_len..] {
+        match c {
+            Component::Normal(_) | Component::CurDir => result.push(".."),
+            _ => return to.to_path_buf(),
+        }
+    }
+
+    for c in &to_components[common_len..] {
+        result.push(c);
+    }
+
+    if result.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        result
+    }
+}
+
+pub fn rebase_env_file(raw: &str, root: &Path, compose_dir: &Path) -> String {
+    let p = Path::new(raw);
+    if p.is_absolute() {
+        return raw.to_string();
+    }
+    let abs_target = root.join(p);
+    let rel = diff_paths(&abs_target, compose_dir);
+    rel.to_string_lossy().into_owned()
 }
 
 fn build_env_map(env: &IndexMap<String, serde_json::Value>) -> Option<IndexMap<String, String>> {
@@ -1358,5 +1440,137 @@ mod tests {
                 Value::String("server".to_string()),
             ])
         );
+    }
+
+    #[test]
+    fn test_diff_paths_relative_and_absolute() {
+        let root = Path::new("/Users/dev/project");
+        let to = root.join("config/.env");
+
+        // Compose file in ved/ subdirectory
+        let from_ved = root.join("ved");
+        assert_eq!(diff_paths(&to, &from_ved), PathBuf::from("../config/.env"));
+
+        // Compose file in .ved/ subdirectory
+        let from_dot_ved = root.join(".ved");
+        assert_eq!(
+            diff_paths(&to, &from_dot_ved),
+            PathBuf::from("../config/.env")
+        );
+
+        // Compose file in root directory
+        assert_eq!(diff_paths(&to, root), PathBuf::from("config/.env"));
+
+        // Deeply nested compose file
+        let from_nested = root.join("deploy/staging");
+        assert_eq!(
+            diff_paths(&to, &from_nested),
+            PathBuf::from("../../config/.env")
+        );
+
+        // Same directory
+        let from_config = root.join("config");
+        assert_eq!(diff_paths(&to, &from_config), PathBuf::from(".env"));
+    }
+
+    #[test]
+    fn test_rebase_env_file_absolute_and_relative() {
+        let root = Path::new("/Users/dev/project");
+        let compose_dir = root.join("ved");
+
+        // Relative path rebasing
+        assert_eq!(
+            rebase_env_file("config/.env", root, &compose_dir),
+            "../config/.env"
+        );
+        assert_eq!(
+            rebase_env_file("config/.local.env", root, &compose_dir),
+            "../config/.local.env"
+        );
+
+        // Absolute path preserved
+        assert_eq!(
+            rebase_env_file("/etc/ssl/env.conf", root, &compose_dir),
+            "/etc/ssl/env.conf"
+        );
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn test_compose_rebases_env_file_to_compose_location() {
+        let tmp =
+            std::env::temp_dir().join(format!("ved-compose-rebase-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(tmp.join("config")).unwrap();
+        std::fs::create_dir_all(tmp.join("ved")).unwrap();
+
+        let mut spec = AppSpec {
+            app: "rebase-app".to_string(),
+            version: "1.0.0".to_string(),
+            env_files: vec!["config/.env".to_string(), "config/.local.env".to_string()],
+            ..Default::default()
+        };
+        spec.services.insert(
+            "api".to_string(),
+            ServiceSpec {
+                image: Some("alpine:latest".to_string()),
+                ..Default::default()
+            },
+        );
+
+        // 1. Context configured with COMPOSE_PATH=ved/docker-compose.yml
+        let mut env_map = std::collections::BTreeMap::new();
+        env_map.insert(
+            "COMPOSE_PATH".to_string(),
+            "ved/docker-compose.yml".to_string(),
+        );
+        let locator =
+            crate::ConfigLocator::new(tmp.join("config"), tmp.join("config/.generated.env"));
+        let snapshot = crate::ConfigSnapshot::with_environment(&locator, env_map);
+        let ctx = crate::WorkspaceContext::with_snapshot(
+            tmp.clone(),
+            tmp.join("config"),
+            tmp.join(".ved"),
+            None,
+            tmp.join("config/.generated.env"),
+            snapshot,
+        );
+
+        let validated = ValidatedSpec::try_from(&spec).unwrap();
+        let yaml_str = generate_compose_validated_with_context(&validated, &ctx).unwrap();
+        let parsed: Value = serde_yaml::from_str(&yaml_str).unwrap();
+        let env_file = &parsed["services"]["api"]["env_file"];
+        assert_eq!(
+            env_file,
+            &Value::Sequence(vec![
+                Value::String("../config/.env".to_string()),
+                Value::String("../config/.local.env".to_string()),
+            ])
+        );
+
+        // 2. Context configured with COMPOSE_PATH=docker-compose.yml (at root)
+        let mut root_env = std::collections::BTreeMap::new();
+        root_env.insert("COMPOSE_PATH".to_string(), "docker-compose.yml".to_string());
+        let root_snapshot = crate::ConfigSnapshot::with_environment(&locator, root_env);
+        let root_ctx = crate::WorkspaceContext::with_snapshot(
+            tmp.clone(),
+            tmp.join("config"),
+            tmp.join(".ved"),
+            None,
+            tmp.join("config/.generated.env"),
+            root_snapshot,
+        );
+        let root_yaml = generate_compose_validated_with_context(&validated, &root_ctx).unwrap();
+        let root_parsed: Value = serde_yaml::from_str(&root_yaml).unwrap();
+        let root_env_file = &root_parsed["services"]["api"]["env_file"];
+        assert_eq!(
+            root_env_file,
+            &Value::Sequence(vec![
+                Value::String("config/.env".to_string()),
+                Value::String("config/.local.env".to_string()),
+            ])
+        );
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

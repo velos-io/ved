@@ -249,6 +249,22 @@ impl WorkspaceContext {
     pub fn config(&self) -> &ConfigSnapshot {
         &self.config
     }
+    pub fn compose_file_path(&self) -> PathBuf {
+        if let Some(ref out) = self.output_dir {
+            out.join(crate::r::files::COMPOSE_FILE)
+        } else {
+            let comp_prop = self.config.get_prop(
+                crate::r::keys::COMPOSE_PATH,
+                crate::r::defaults::COMPOSE_PATH,
+            );
+            let p = Path::new(&comp_prop);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else {
+                self.root.join(p)
+            }
+        }
+    }
     pub fn locator(&self) -> ConfigLocator {
         ConfigLocator::new(self.config_dir.clone(), self.generated_env.clone())
     }

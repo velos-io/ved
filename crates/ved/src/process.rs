@@ -255,7 +255,7 @@ use crate::context::WorkspaceContext;
 use std::path::Path;
 
 pub(crate) fn default_compose_path() -> &'static str {
-    ".ved/docker-compose.yml"
+    ved_core::r::defaults::COMPOSE_PATH
 }
 
 pub(crate) fn command_with_ctx(ctx: &WorkspaceContext, executable: &str) -> CommandBuilder {
