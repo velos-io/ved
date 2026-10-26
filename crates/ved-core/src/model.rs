@@ -256,23 +256,25 @@ impl PortSpec {
         match parts.len() {
             1 => {
                 let port_part = parts[0].split('/').next().unwrap_or(parts[0]).trim();
-                let port = port_part
-                    .parse::<u16>()
-                    .map_err(|source| PortParseError::InvalidPort {
-                        input: trimmed.to_string(),
-                        source,
-                    })?;
+                let port =
+                    port_part
+                        .parse::<u16>()
+                        .map_err(|source| PortParseError::InvalidPort {
+                            input: trimmed.to_string(),
+                            source,
+                        })?;
                 Ok(Self::single(port))
             }
             2 => {
                 let host_part = parts[0].trim();
                 let container_part = parts[1].split('/').next().unwrap_or(parts[1]).trim();
-                let host = host_part
-                    .parse::<u16>()
-                    .map_err(|source| PortParseError::InvalidHost {
-                        input: host_part.to_string(),
-                        source,
-                    })?;
+                let host =
+                    host_part
+                        .parse::<u16>()
+                        .map_err(|source| PortParseError::InvalidHost {
+                            input: host_part.to_string(),
+                            source,
+                        })?;
                 let container = container_part.parse::<u16>().map_err(|source| {
                     PortParseError::InvalidContainer {
                         input: container_part.to_string(),
@@ -290,12 +292,13 @@ impl PortSpec {
                 }
                 let host_part = parts[1].trim();
                 let container_part = parts[2].split('/').next().unwrap_or(parts[2]).trim();
-                let host = host_part
-                    .parse::<u16>()
-                    .map_err(|source| PortParseError::InvalidHost {
-                        input: host_part.to_string(),
-                        source,
-                    })?;
+                let host =
+                    host_part
+                        .parse::<u16>()
+                        .map_err(|source| PortParseError::InvalidHost {
+                            input: host_part.to_string(),
+                            source,
+                        })?;
                 let container = container_part.parse::<u16>().map_err(|source| {
                     PortParseError::InvalidContainer {
                         input: container_part.to_string(),
@@ -386,11 +389,17 @@ impl TryFrom<serde_json::Value> for PortSpec {
             serde_json::Value::Object(map) => {
                 let target = map
                     .get("target")
-                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .and_then(|v| {
+                        v.as_u64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    })
                     .ok_or_else(|| "missing target in port mapping".to_string())?;
                 let published = map
                     .get("published")
-                    .and_then(|v| v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                    .and_then(|v| {
+                        v.as_u64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    })
                     .unwrap_or(target);
                 if target > u16::MAX as u64 || published > u16::MAX as u64 {
                     return Err("port number exceeds maximum u16".to_string());
@@ -1752,4 +1761,3 @@ mod checked_port_tests {
         assert_eq!(hc_camel.start_period.as_deref(), Some("15s"));
     }
 }
-

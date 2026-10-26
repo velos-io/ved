@@ -621,28 +621,28 @@ fn build_ports_value(ports: &[PortSpec], raw_ports: &[serde_json::Value]) -> Opt
             if let Some(s) = p.as_str() {
                 result.push(s.to_string());
             } else if let Some(n) = p.as_u64() {
-                result.push(format!("{}:{}", n, n));
+                result.push(format!("{n}:{n}"));
             } else if let Some(map) = p.as_object() {
                 let target = map.get("target").and_then(|v| v.as_u64());
                 let published = map.get("published").and_then(|v| v.as_u64());
                 let host_ip = map.get("host_ip").and_then(|v| v.as_str());
                 let proto = map.get("protocol").and_then(|v| v.as_str());
                 let proto_suffix = match proto {
-                    Some(pr) if pr != "tcp" => format!("/{}", pr),
+                    Some(pr) if pr != "tcp" => format!("/{pr}"),
                     _ => String::new(),
                 };
                 match (host_ip, published, target) {
                     (Some(ip), Some(pub_p), Some(tgt)) => {
-                        result.push(format!("{}:{}:{}{}", ip, pub_p, tgt, proto_suffix));
+                        result.push(format!("{ip}:{pub_p}:{tgt}{proto_suffix}"));
                     }
                     (None, Some(pub_p), Some(tgt)) => {
-                        result.push(format!("{}:{}{}", pub_p, tgt, proto_suffix));
+                        result.push(format!("{pub_p}:{tgt}{proto_suffix}"));
                     }
                     (Some(ip), None, Some(tgt)) => {
-                        result.push(format!("{}:{}:{}{}", ip, tgt, tgt, proto_suffix));
+                        result.push(format!("{ip}:{tgt}:{tgt}{proto_suffix}"));
                     }
                     (None, None, Some(tgt)) => {
-                        result.push(format!("{}:{}{}", tgt, tgt, proto_suffix));
+                        result.push(format!("{tgt}:{tgt}{proto_suffix}"));
                     }
                     _ => {}
                 }
@@ -757,10 +757,7 @@ fn build_mounts_value(mounts: &[MountSpec]) -> Option<Vec<Value>> {
                         Value::String(dst.to_string()),
                     );
                     if read_only {
-                        map.insert(
-                            Value::String("read_only".to_string()),
-                            Value::Bool(true),
-                        );
+                        map.insert(Value::String("read_only".to_string()), Value::Bool(true));
                     }
                     Value::Mapping(map)
                 } else {

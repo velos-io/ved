@@ -529,11 +529,15 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                 } else if let Some(m) = p.as_mapping() {
                     let target = m
                         .get(Value::String("target".to_string()))
-                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
+                        .and_then(|v| {
+                            v.as_i64()
+                                .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                        })
                         .unwrap_or(80);
-                    let published = m
-                        .get(Value::String("published".to_string()))
-                        .and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.parse().ok())));
+                    let published = m.get(Value::String("published".to_string())).and_then(|v| {
+                        v.as_i64()
+                            .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
+                    });
                     let host_ip = m
                         .get(Value::String("host_ip".to_string()))
                         .and_then(|v| v.as_str());
@@ -550,7 +554,8 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                     }
                     if let Some(proto) = protocol {
                         if proto != "tcp" {
-                            port_kwargs.push(("protocol".to_string(), Expr::Literal(proto.to_string())));
+                            port_kwargs
+                                .push(("protocol".to_string(), Expr::Literal(proto.to_string())));
                         }
                     }
                     port_exprs.push(Expr::Call {
@@ -1549,10 +1554,13 @@ networks:
             Some(serde_json::json!({"private": {"aliases": ["app", "custom-alias"]}}))
         );
         assert_eq!(svc.ports, vec![serde_json::json!("127.0.0.1:18090:8090")]);
-        assert_eq!(svc.mounts, vec!["long:volume:store-state:/data".to_string()]);
+        assert_eq!(
+            svc.mounts,
+            vec!["long:volume:store-state:/data".to_string()]
+        );
 
-        let compose_out = crate::compose::generate_compose(&spec)
-            .expect("generate compose from spec");
+        let compose_out =
+            crate::compose::generate_compose(&spec).expect("generate compose from spec");
         assert!(compose_out.contains("127.0.0.1:18090:8090"));
         assert!(compose_out.contains("type: volume"));
         assert!(compose_out.contains("source: store-state"));
