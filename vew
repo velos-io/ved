@@ -23,7 +23,7 @@ if [ -f "$CACHED_BIN" ] && [ -x "$CACHED_BIN" ]; then
 fi
 
 # 4. Resolve desired version and GitHub repository
-VERSION="0.2.11"
+VERSION="0.2.12"
 if [ -f "$SCRIPT_DIR/.ved/.ved-version" ]; then
     VERSION="$(tr -d '[:space:]' < "$SCRIPT_DIR/.ved/.ved-version")"
 elif [ -f "$SCRIPT_DIR/.ved-version" ]; then
