@@ -1,31 +1,40 @@
+use std::collections::BTreeMap;
 #[cfg(feature = "host")]
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, RwLock};
 
 pub const CONFIG_DIR: &str = crate::r::dirs::CONFIG_DIR;
 pub const ENV_FILE: &str = "config/.env";
 pub const LOCAL_ENV_FILE: &str = "config/.local.env";
 pub const GENERATED_ENV_FILE: &str = "config/.generated.env";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ConfigLocator {
     pub config_dir: PathBuf,
     pub generated_env: PathBuf,
+    cache: Arc<RwLock<Option<BTreeMap<String, String>>>>,
 }
+
+impl PartialEq for ConfigLocator {
+    fn eq(&self, other: &Self) -> bool {
+        self.config_dir == other.config_dir && self.generated_env == other.generated_env
+    }
+}
+
+impl Eq for ConfigLocator {}
 
 impl ConfigLocator {
     pub fn new(config_dir: PathBuf, generated_env: PathBuf) -> Self {
         Self {
             config_dir,
             generated_env,
+            cache: Arc::new(RwLock::new(None)),
         }
     }
 
     pub fn legacy(root: &Path) -> Self {
-        Self {
-            config_dir: root.join(CONFIG_DIR),
-            generated_env: root.join(GENERATED_ENV_FILE),
-        }
+        Self::new(root.join(CONFIG_DIR), root.join(GENERATED_ENV_FILE))
     }
 
     pub fn env_file(&self) -> PathBuf {
@@ -40,6 +49,56 @@ impl ConfigLocator {
         self.generated_env.clone()
     }
 
+    pub fn invalidate_cache(&self) {
+        let mut guard = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        *guard = None;
+    }
+
+    #[cfg(feature = "host")]
+    pub fn cached_properties(&self) -> BTreeMap<String, String> {
+        {
+            let guard = self.cache.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref map) = *guard {
+                return map.clone();
+            }
+        }
+        let mut guard = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref map) = *guard {
+            return map.clone();
+        }
+        let map = self.load_properties_from_disk();
+        *guard = Some(map.clone());
+        map
+    }
+
+    #[cfg(feature = "host")]
+    fn load_properties_from_disk(&self) -> BTreeMap<String, String> {
+        let mut values = BTreeMap::new();
+        for file in [
+            self.local_env_file(),
+            self.env_file(),
+            self.generated_env_file(),
+        ] {
+            if let Ok(content) = fs::read_to_string(&file) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.starts_with('#') || !trimmed.contains('=') {
+                        continue;
+                    }
+                    if let Some((k, v)) = trimmed.split_once('=') {
+                        let clean_v = v.trim().trim_matches('"').trim_matches('\'');
+                        if !clean_v.is_empty() {
+                            values
+                                .entry(k.trim().to_string())
+                                .or_insert_with(|| clean_v.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        values
+    }
+
     #[cfg(feature = "host")]
     pub fn get_prop(&self, key: &str, default: &str) -> String {
         if let Ok(val) = std::env::var(key) {
@@ -48,30 +107,20 @@ impl ConfigLocator {
                 return trimmed.to_string();
             }
         }
-        for file in &[
-            self.local_env_file(),
-            self.env_file(),
-            self.generated_env_file(),
-        ] {
-            if let Ok(content) = fs::read_to_string(file) {
-                for line in content.lines() {
-                    let trimmed = line.trim();
-                    if trimmed.starts_with('#') || !trimmed.contains('=') {
-                        continue;
-                    }
-                    let mut parts = trimmed.splitn(2, '=');
-                    if let (Some(k), Some(v)) = (parts.next(), parts.next()) {
-                        if k.trim() == key {
-                            let clean_v = v.trim().trim_matches('"').trim_matches('\'');
-                            if !clean_v.is_empty() {
-                                return clean_v.to_string();
-                            }
-                        }
-                    }
-                }
+        {
+            let guard = self.cache.read().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref map) = *guard {
+                return map.get(key).cloned().unwrap_or_else(|| default.to_string());
             }
         }
-        default.to_string()
+        let mut guard = self.cache.write().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref map) = *guard {
+            return map.get(key).cloned().unwrap_or_else(|| default.to_string());
+        }
+        let map = self.load_properties_from_disk();
+        let val = map.get(key).cloned().unwrap_or_else(|| default.to_string());
+        *guard = Some(map);
+        val
     }
 
     #[cfg(feature = "host")]
@@ -157,29 +206,7 @@ impl ConfigSnapshot {
         locator: &ConfigLocator,
         environment: std::collections::BTreeMap<String, String>,
     ) -> Self {
-        let mut values = std::collections::BTreeMap::new();
-        for path in [
-            locator.local_env_file(),
-            locator.env_file(),
-            locator.generated_env_file(),
-        ] {
-            if let Ok(content) = fs::read_to_string(path) {
-                for line in content.lines() {
-                    let line = line.trim();
-                    if line.starts_with('#') {
-                        continue;
-                    }
-                    if let Some((key, value)) = line.split_once('=') {
-                        let value = value.trim().trim_matches('"').trim_matches('\'');
-                        if !value.is_empty() {
-                            values
-                                .entry(key.trim().to_owned())
-                                .or_insert_with(|| value.to_owned());
-                        }
-                    }
-                }
-            }
-        }
+        let mut values = locator.cached_properties();
         for (key, value) in &environment {
             if !value.trim().is_empty() {
                 values.insert(key.clone(), value.trim().to_owned());
@@ -466,6 +493,89 @@ mod tests {
         assert_eq!(locator.get_prop("OVERRIDE_KEY", "default"), "local");
         assert_eq!(locator.get_prop("GEN_KEY", "default"), "generated");
         assert_eq!(locator.get_prop("MISSING_KEY", "default"), "default");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    #[cfg(feature = "host")]
+    fn test_config_locator_caching_and_invalidation() {
+        let tmp = std::env::temp_dir().join(format!(
+            "test_config_cache_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        let cfg_dir = tmp.join("config");
+        fs::create_dir_all(&cfg_dir).unwrap();
+
+        let env_file = cfg_dir.join(".env");
+        let gen_file = tmp.join(".generated.env");
+        fs::write(&env_file, "APP_TITLE=v1\n").unwrap();
+        fs::write(&gen_file, "PORT=8080\n").unwrap();
+
+        let locator = ConfigLocator::new(cfg_dir, gen_file.clone());
+
+        // First read populates cache
+        assert_eq!(locator.get_prop("APP_TITLE", "none"), "v1");
+        assert_eq!(locator.get_prop("PORT", "0"), "8080");
+
+        // Mutate files on disk directly
+        fs::write(&env_file, "APP_TITLE=v2\n").unwrap();
+        fs::write(&gen_file, "PORT=9090\n").unwrap();
+
+        // Cached values remain returned because cache was not invalidated
+        assert_eq!(locator.get_prop("APP_TITLE", "none"), "v1");
+        assert_eq!(locator.get_prop("PORT", "0"), "8080");
+
+        // Clone shares the exact same cache
+        let cloned_locator = locator.clone();
+        assert_eq!(cloned_locator.get_prop("APP_TITLE", "none"), "v1");
+
+        // Invalidate cache
+        locator.invalidate_cache();
+
+        // Fresh values are now read
+        assert_eq!(locator.get_prop("APP_TITLE", "none"), "v2");
+        assert_eq!(cloned_locator.get_prop("PORT", "0"), "9090");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    #[cfg(feature = "host")]
+    fn test_config_locator_concurrent_reads() {
+        let tmp = std::env::temp_dir().join(format!(
+            "test_config_concurrent_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        let cfg_dir = tmp.join("config");
+        fs::create_dir_all(&cfg_dir).unwrap();
+
+        fs::write(cfg_dir.join(".env"), "SHARED_KEY=concurrent_val\n").unwrap();
+        let locator = ConfigLocator::new(cfg_dir, tmp.join(".generated.env"));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let loc = locator.clone();
+            handles.push(std::thread::spawn(move || {
+                for _ in 0..100 {
+                    assert_eq!(loc.get_prop("SHARED_KEY", ""), "concurrent_val");
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
 
         let _ = fs::remove_dir_all(&tmp);
     }
