@@ -396,7 +396,9 @@ fn build_compose_service_typed(
     let env_file = build_env_file_value(&svc_env_files);
     let environment = build_env_map(&svc.env);
     let volumes = build_mounts_value(workload.mounts());
-    let healthcheck = build_compose_healthcheck_typed(svc, workload.ports());
+    let healthcheck = workload
+        .healthcheck()
+        .and_then(|hc| build_compose_healthcheck_from_spec(hc, workload.ports()));
     let depends_on = build_depends_on(workload.dependencies(), active_workloads, healthy_workloads);
     let restart = svc.restart.clone();
     let build = svc
@@ -522,9 +524,14 @@ fn build_compose_healthcheck_typed(
     svc: &ServiceSpec,
     ports: &[PortSpec],
 ) -> Option<ComposeHealthcheck> {
-    let health_val = svc.health_value()?;
-    let hc_spec = HealthCheckSpec::from_value(health_val);
+    let hc_spec = svc.typed_healthcheck()?;
+    build_compose_healthcheck_from_spec(&hc_spec, ports)
+}
 
+fn build_compose_healthcheck_from_spec(
+    hc_spec: &HealthCheckSpec,
+    ports: &[PortSpec],
+) -> Option<ComposeHealthcheck> {
     let mut test_seq = Vec::new();
     if let Some(test_val) = &hc_spec.test {
         if let Some(cmd) = test_val.as_str() {
@@ -551,10 +558,10 @@ fn build_compose_healthcheck_typed(
 
     Some(ComposeHealthcheck {
         test: test_seq,
-        interval: hc_spec.interval,
-        timeout: hc_spec.timeout,
+        interval: hc_spec.interval.clone(),
+        timeout: hc_spec.timeout.clone(),
         retries: hc_spec.retries,
-        start_period: hc_spec.start_period,
+        start_period: hc_spec.start_period.clone(),
     })
 }
 

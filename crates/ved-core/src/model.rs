@@ -323,6 +323,24 @@ impl serde::Serialize for PortSpec {
     }
 }
 
+fn parse_port_json_val(val: &serde_json::Value) -> std::result::Result<u16, String> {
+    match val {
+        serde_json::Value::Number(n) => {
+            let p = n
+                .as_u64()
+                .ok_or_else(|| "port number out of bounds".to_string())?;
+            if p > u16::MAX as u64 {
+                return Err(format!("port {p} exceeds maximum u16"));
+            }
+            Ok(p as u16)
+        }
+        serde_json::Value::String(s) => s
+            .parse::<u16>()
+            .map_err(|e| format!("invalid port string '{s}': {e}")),
+        _ => Err("port value must be an integer or string".to_string()),
+    }
+}
+
 struct PortSpecVisitor;
 
 impl<'de> serde::de::Visitor<'de> for PortSpecVisitor {
@@ -360,6 +378,36 @@ impl<'de> serde::de::Visitor<'de> for PortSpecVisitor {
     {
         PortSpec::parse(v).map_err(E::custom)
     }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: serde::de::MapAccess<'de>,
+    {
+        let mut target: Option<u16> = None;
+        let mut published: Option<u16> = None;
+
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "target" | "container" => {
+                    let val: serde_json::Value = map.next_value()?;
+                    let p = parse_port_json_val(&val).map_err(serde::de::Error::custom)?;
+                    target = Some(p);
+                }
+                "published" | "host" => {
+                    let val: serde_json::Value = map.next_value()?;
+                    let p = parse_port_json_val(&val).map_err(serde::de::Error::custom)?;
+                    published = Some(p);
+                }
+                _ => {
+                    let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+
+        let target = target.ok_or_else(|| serde::de::Error::missing_field("target"))?;
+        let published = published.unwrap_or(target);
+        Ok(PortSpec::new(published, target))
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for PortSpec {
@@ -389,6 +437,7 @@ impl TryFrom<serde_json::Value> for PortSpec {
             serde_json::Value::Object(map) => {
                 let target = map
                     .get("target")
+                    .or_else(|| map.get("container"))
                     .and_then(|v| {
                         v.as_u64()
                             .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
@@ -396,6 +445,7 @@ impl TryFrom<serde_json::Value> for PortSpec {
                     .ok_or_else(|| "missing target in port mapping".to_string())?;
                 let published = map
                     .get("published")
+                    .or_else(|| map.get("host"))
                     .and_then(|v| {
                         v.as_u64()
                             .or_else(|| v.as_str().and_then(|s| s.parse().ok()))
@@ -535,6 +585,36 @@ impl<'de> serde::de::Visitor<'de> for CheckedPortSpecVisitor {
         E: serde::de::Error,
     {
         CheckedPortSpec::parse(v).map_err(E::custom)
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+    where
+        M: serde::de::MapAccess<'de>,
+    {
+        let mut target: Option<u16> = None;
+        let mut published: Option<u16> = None;
+
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "target" | "container" => {
+                    let val: serde_json::Value = map.next_value()?;
+                    let p = parse_port_json_val(&val).map_err(serde::de::Error::custom)?;
+                    target = Some(p);
+                }
+                "published" | "host" => {
+                    let val: serde_json::Value = map.next_value()?;
+                    let p = parse_port_json_val(&val).map_err(serde::de::Error::custom)?;
+                    published = Some(p);
+                }
+                _ => {
+                    let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                }
+            }
+        }
+
+        let target = target.ok_or_else(|| serde::de::Error::missing_field("target"))?;
+        let published = published.unwrap_or(target);
+        CheckedPortSpec::new(published, target).map_err(serde::de::Error::custom)
     }
 }
 
@@ -690,6 +770,40 @@ impl HealthProbe {
             Self::Exec {
                 command: vec!["sh".to_string(), "-c".to_string(), trimmed.to_string()],
             }
+        }
+    }
+
+    pub fn from_value(val: &serde_json::Value, default_port: u16) -> Option<Self> {
+        if let Some(cmd) = val.as_str() {
+            Some(Self::parse_cmd(cmd, default_port))
+        } else if let Some(arr) = val.as_array() {
+            let parts: Vec<String> = arr
+                .iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(Self::Exec { command: parts })
+            }
+        } else if let Some(obj) = val.as_object() {
+            if let Some(cmd) = obj.get("test").and_then(|t| t.as_str()) {
+                Some(Self::parse_cmd(cmd, default_port))
+            } else if let Some(arr) = obj.get("test").and_then(|t| t.as_array()) {
+                let parts: Vec<String> = arr
+                    .iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect();
+                if parts.is_empty() {
+                    None
+                } else {
+                    Some(Self::Exec { command: parts })
+                }
+            } else {
+                None
+            }
+        } else {
+            None
         }
     }
 }
@@ -934,7 +1048,7 @@ impl RestartPolicy {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct HealthCheckSpec {
     pub test: Option<serde_json::Value>,
     #[serde(default = "default_health_interval")]
@@ -962,6 +1076,104 @@ pub fn default_health_timeout() -> String {
 
 pub fn default_health_retries() -> u32 {
     5
+}
+
+impl<'de> serde::Deserialize<'de> for HealthCheckSpec {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct HealthCheckSpecVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for HealthCheckSpecVisitor {
+            type Value = HealthCheckSpec;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter
+                    .write_str("a healthcheck specification (string, array of strings, or mapping)")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(HealthCheckSpec::from_value(&serde_json::Value::String(
+                    v.to_string(),
+                )))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let mut items = Vec::new();
+                while let Some(elem) = seq.next_element::<serde_json::Value>()? {
+                    items.push(elem);
+                }
+                Ok(HealthCheckSpec::from_value(&serde_json::Value::Array(
+                    items,
+                )))
+            }
+
+            fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+            where
+                M: serde::de::MapAccess<'de>,
+            {
+                let mut test = None;
+                let mut interval = None;
+                let mut timeout = None;
+                let mut retries = None;
+                let mut start_period = None;
+
+                while let Some(key) = map.next_key::<String>()? {
+                    match key.as_str() {
+                        "test" => {
+                            test = Some(map.next_value::<serde_json::Value>()?);
+                        }
+                        "interval" => {
+                            interval = Some(map.next_value::<String>()?);
+                        }
+                        "timeout" => {
+                            timeout = Some(map.next_value::<String>()?);
+                        }
+                        "retries" => {
+                            let val: serde_json::Value = map.next_value()?;
+                            let r = match val {
+                                serde_json::Value::Number(n) => n.as_u64().map(|x| x as u32),
+                                serde_json::Value::String(s) => s.parse::<u32>().ok(),
+                                _ => None,
+                            };
+                            retries = r;
+                        }
+                        "start_period" | "startPeriod" => {
+                            start_period = Some(map.next_value::<String>()?);
+                        }
+                        _ => {
+                            let _ = map.next_value::<serde::de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                Ok(HealthCheckSpec {
+                    test,
+                    interval: interval.unwrap_or_else(default_health_interval),
+                    timeout: timeout.unwrap_or_else(default_health_timeout),
+                    retries: retries.unwrap_or_else(default_health_retries),
+                    start_period,
+                })
+            }
+        }
+
+        deserializer.deserialize_any(HealthCheckSpecVisitor)
+    }
+}
+
+impl TryFrom<serde_json::Value> for HealthCheckSpec {
+    type Error = serde_json::Error;
+
+    fn try_from(val: serde_json::Value) -> Result<Self, Self::Error> {
+        serde_json::from_value(val)
+    }
 }
 
 impl HealthCheckSpec {
@@ -1067,6 +1279,10 @@ pub struct ServiceSpec {
 }
 
 impl ServiceSpec {
+    pub fn typed_healthcheck(&self) -> Option<HealthCheckSpec> {
+        self.health_value().map(HealthCheckSpec::from_value)
+    }
+
     pub fn health_value(&self) -> Option<&serde_json::Value> {
         self.healthcheck.as_ref().or(self.health.as_ref())
     }
@@ -1076,38 +1292,8 @@ impl ServiceSpec {
     }
 
     pub fn health_probe(&self, default_port: u16) -> Option<HealthProbe> {
-        let health_val = self.health_value()?;
-        if let Some(cmd) = health_val.as_str() {
-            Some(HealthProbe::parse_cmd(cmd, default_port))
-        } else if let Some(arr) = health_val.as_array() {
-            let parts: Vec<String> = arr
-                .iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect();
-            if parts.is_empty() {
-                None
-            } else {
-                Some(HealthProbe::Exec { command: parts })
-            }
-        } else if let Some(obj) = health_val.as_object() {
-            if let Some(cmd) = obj.get("test").and_then(|t| t.as_str()) {
-                Some(HealthProbe::parse_cmd(cmd, default_port))
-            } else if let Some(arr) = obj.get("test").and_then(|t| t.as_array()) {
-                let parts: Vec<String> = arr
-                    .iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect();
-                if parts.is_empty() {
-                    None
-                } else {
-                    Some(HealthProbe::Exec { command: parts })
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        }
+        self.health_value()
+            .and_then(|val| HealthProbe::from_value(val, default_port))
     }
 
     /// Use explicit activation, then ambient host configuration when `host` is enabled.
@@ -1759,5 +1945,71 @@ mod checked_port_tests {
         });
         let hc_camel = HealthCheckSpec::from_value(&explicit_camel);
         assert_eq!(hc_camel.start_period.as_deref(), Some("15s"));
+    }
+
+    #[test]
+    fn test_portspec_and_checkedportspec_map_deserialization() {
+        let json_standard = json!({
+            "target": 80,
+            "published": 8080
+        });
+        let port: PortSpec = serde_json::from_value(json_standard.clone()).unwrap();
+        assert_eq!(port, PortSpec::new(8080, 80));
+
+        let checked: CheckedPortSpec = serde_json::from_value(json_standard).unwrap();
+        assert_eq!(checked.host(), 8080);
+        assert_eq!(checked.container(), 80);
+
+        let json_aliases = json!({
+            "container": 3000,
+            "host": 9000
+        });
+        let port_alias: PortSpec = serde_json::from_value(json_aliases.clone()).unwrap();
+        assert_eq!(port_alias, PortSpec::new(9000, 3000));
+
+        let checked_alias: CheckedPortSpec = serde_json::from_value(json_aliases).unwrap();
+        assert_eq!(checked_alias.host(), 9000);
+        assert_eq!(checked_alias.container(), 3000);
+
+        let json_target_only = json!({
+            "target": "5432"
+        });
+        let port_target_only: PortSpec = serde_json::from_value(json_target_only).unwrap();
+        assert_eq!(port_target_only, PortSpec::new(5432, 5432));
+    }
+
+    #[test]
+    fn test_healthcheck_polymorphic_deserialization_and_typed_service() {
+        let string_json = json!("/livez");
+        let hc_string: HealthCheckSpec = serde_json::from_value(string_json).unwrap();
+        assert_eq!(hc_string.test, Some(json!("/livez")));
+        assert_eq!(hc_string.interval, "15s");
+
+        let array_json = json!(["CMD", "curl", "-f", "http://localhost/livez"]);
+        let hc_array: HealthCheckSpec = serde_json::from_value(array_json).unwrap();
+        assert_eq!(
+            hc_array.test,
+            Some(json!(["CMD", "curl", "-f", "http://localhost/livez"]))
+        );
+
+        let obj_json = json!({
+            "test": ["CMD-SHELL", "redis-cli ping"],
+            "interval": "10s",
+            "timeout": "3s",
+            "retries": 4,
+            "start_period": "20s"
+        });
+        let hc_obj: HealthCheckSpec = serde_json::from_value(obj_json).unwrap();
+        assert_eq!(hc_obj.interval, "10s");
+        assert_eq!(hc_obj.timeout, "3s");
+        assert_eq!(hc_obj.retries, 4);
+        assert_eq!(hc_obj.start_period.as_deref(), Some("20s"));
+
+        let svc = ServiceSpec {
+            health: Some(json!("/healthz")),
+            ..Default::default()
+        };
+        let typed = svc.typed_healthcheck().expect("typed healthcheck");
+        assert_eq!(typed.test, Some(json!("/healthz")));
     }
 }

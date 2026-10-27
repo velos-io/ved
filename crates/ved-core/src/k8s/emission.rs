@@ -181,15 +181,15 @@ pub(super) fn build_service_manifest(
     if !mounts.is_empty() {
         container.push(("volumeMounts", YamlNode::sequence(mounts)));
     }
-    if let Some(probe) = svc.health_probe(ports.first().map(|p| p.1).unwrap_or(8080)) {
+    if let Some(probe) = typed.health_probe() {
         let (kind, value, period) = match probe {
             crate::model::HealthProbe::Http { path, port, scheme } => {
                 let (path, port, scheme) =
                     if path.starts_with("http://") || path.starts_with("https://") {
-                        let (p, n, s) = parse_http_probe(&path, port, &ports);
+                        let (p, n, s) = parse_http_probe(path, *port, &ports);
                         (p, n, s.to_string())
                     } else {
-                        (path, port, scheme)
+                        (path.clone(), *port, scheme.clone())
                     };
                 let mut entries = vec![
                     ("path", YamlNode::scalar(path)),
@@ -203,13 +203,13 @@ pub(super) fn build_service_manifest(
             crate::model::HealthProbe::Tcp { port } => {
                 let port = ports
                     .iter()
-                    .find(|(hp, _)| *hp == port)
+                    .find(|(hp, _)| *hp == *port)
                     .map(|(_, cp)| *cp)
-                    .unwrap_or(port);
+                    .unwrap_or(*port);
                 ("tcpSocket", map(vec![("port", YamlNode::integer(port))]), 3)
             }
             crate::model::HealthProbe::Exec { command } => {
-                ("exec", map(vec![("command", strings(command))]), 5)
+                ("exec", map(vec![("command", strings(command.clone()))]), 5)
             }
         };
         container.push((

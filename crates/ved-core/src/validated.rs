@@ -1,6 +1,8 @@
 //! Immutable, semantically checked compiler inputs.
 use crate::error::{Result, ValidationError, ValidationReason, VedError};
-use crate::model::{AppSpec, CheckedPortSpec, CommandSpec, MountSpec, PortSpec};
+use crate::model::{
+    AppSpec, CheckedPortSpec, CommandSpec, HealthCheckSpec, HealthProbe, MountSpec, PortSpec,
+};
 use indexmap::IndexMap;
 
 /// A specification whose typed fields and dependency graph have been checked.
@@ -45,6 +47,8 @@ pub struct ValidatedWorkload {
     entrypoint: Option<CommandSpec>,
     command: Option<CommandSpec>,
     mounts: Vec<MountSpec>,
+    healthcheck: Option<HealthCheckSpec>,
+    health_probe: Option<HealthProbe>,
     dependencies: Vec<DependencySpec>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +92,12 @@ impl ValidatedWorkload {
     }
     pub fn mounts(&self) -> &[MountSpec] {
         &self.mounts
+    }
+    pub fn healthcheck(&self) -> Option<&HealthCheckSpec> {
+        self.healthcheck.as_ref()
+    }
+    pub fn health_probe(&self) -> Option<&HealthProbe> {
+        self.health_probe.as_ref()
     }
     pub fn dependencies(&self) -> &[DependencySpec] {
         &self.dependencies
@@ -151,6 +161,7 @@ fn workload(
     entrypoint: Option<&serde_json::Value>,
     command: Option<&serde_json::Value>,
     mounts: &[String],
+    health_value: Option<&serde_json::Value>,
 ) -> Result<ValidatedWorkload> {
     if port == Some(0) {
         return Err(error(
@@ -189,7 +200,7 @@ fn workload(
             })?);
         }
     }
-    let parsed_ports = checked_ports.iter().copied().map(PortSpec::from).collect();
+    let parsed_ports: Vec<PortSpec> = checked_ports.iter().copied().map(PortSpec::from).collect();
     let entrypoint = entrypoint
         .map(|value| {
             serde_json::from_value(value.clone()).map_err(|e| {
@@ -240,12 +251,22 @@ fn workload(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    let default_probe_port = parsed_ports
+        .first()
+        .map(|p| p.container)
+        .or(port)
+        .unwrap_or(8080);
+    let healthcheck = health_value.map(HealthCheckSpec::from_value);
+    let health_probe =
+        health_value.and_then(|val| HealthProbe::from_value(val, default_probe_port));
     Ok(ValidatedWorkload {
         ports: parsed_ports,
         checked_ports,
         entrypoint,
         command,
         mounts,
+        healthcheck,
+        health_probe,
         dependencies: Vec::new(),
     })
 }
@@ -409,6 +430,7 @@ impl ValidatedSpec {
                     svc.entrypoint.as_ref(),
                     svc.command.as_ref(),
                     &svc.mounts,
+                    svc.health_value(),
                 )?,
                 &svc.wait_for,
             )?;
@@ -425,6 +447,7 @@ impl ValidatedSpec {
                     job.entrypoint.as_ref(),
                     job.command.as_ref(),
                     &job.mounts,
+                    None,
                 )?,
                 &job.wait_for,
             )?;
@@ -443,6 +466,7 @@ impl ValidatedSpec {
                         svc.entrypoint.as_ref(),
                         svc.command.as_ref(),
                         &svc.mounts,
+                        svc.health_value(),
                     )?,
                     &svc.wait_for,
                 )?;
@@ -459,6 +483,7 @@ impl ValidatedSpec {
                         job.entrypoint.as_ref(),
                         job.command.as_ref(),
                         &job.mounts,
+                        None,
                     )?,
                     &job.wait_for,
                 )?;
@@ -969,5 +994,34 @@ mod graph_reason_tests {
         assert!(validated.workload(Some("prod"), "worker").is_some());
         assert!(validated.workload(Some("dev"), "web").is_none());
         assert!(validated.workload(None, "nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_workload_healthcheck_and_probe_populated() {
+        let mut wire = AppSpec::default();
+        wire.services.insert(
+            "web".into(),
+            ServiceSpec {
+                ports: vec![serde_json::json!({"target": 8080, "published": 80})],
+                health: Some(serde_json::json!("/healthz")),
+                ..Default::default()
+            },
+        );
+
+        let validated = ValidatedSpec::try_from(wire).unwrap();
+        let workload = validated.workload(None, "web").unwrap();
+        let hc = workload.healthcheck().expect("healthcheck present");
+        assert_eq!(hc.test, Some(serde_json::json!("/healthz")));
+        assert_eq!(hc.interval, "15s");
+
+        let probe = workload.health_probe().expect("health probe present");
+        assert_eq!(
+            probe,
+            &HealthProbe::Http {
+                path: "/healthz".into(),
+                port: 8080,
+                scheme: "HTTP".into(),
+            }
+        );
     }
 }
