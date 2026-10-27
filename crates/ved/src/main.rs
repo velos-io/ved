@@ -72,9 +72,6 @@ fn run_with_cwd(
         output_dir: cli.output_dir,
     };
     let paths = WorkspacePaths::resolve(&dirs, &cwd);
-    if paths.config_dir_explicit {
-        std::env::set_var("VED_CONFIG_DIR", &paths.config_dir);
-    }
 
     let needs = match &cli.command {
         cli::Commands::Up(_)

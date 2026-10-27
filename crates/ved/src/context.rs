@@ -1,7 +1,7 @@
 use crate::cli::Slot;
 use crate::paths::{ArtifactLayout, CliDirs, WorkspacePaths};
 use std::path::{Path, PathBuf};
-use ved_core::ConfigLocator;
+use ved_core::{ConfigLocator, ConfigSnapshot};
 
 /// Encapsulates workspace paths and execution context for commands.
 #[derive(Debug, Clone)]
@@ -24,12 +24,21 @@ impl WorkspaceContext {
     }
 
     pub(crate) fn with_paths(paths: WorkspacePaths) -> crate::error::Result<Self> {
-        let core = ved_core::WorkspaceContext::try_with_paths(
+        let locator = ConfigLocator::new(paths.config_dir.clone(), paths.generated_env_file());
+        let mut snapshot = ConfigSnapshot::capture(&locator);
+        if paths.config_dir_explicit {
+            snapshot = snapshot.with_property(
+                "VED_CONFIG_DIR",
+                paths.config_dir.to_string_lossy().into_owned(),
+            );
+        }
+        let core = ved_core::WorkspaceContext::try_with_snapshot(
             paths.root.clone(),
             paths.config_dir.clone(),
             paths.work_dir.clone(),
             paths.output_dir.clone(),
             paths.generated_env_file(),
+            snapshot,
         )?;
         Ok(Self {
             paths,

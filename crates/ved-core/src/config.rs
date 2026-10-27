@@ -201,6 +201,17 @@ impl ConfigSnapshot {
                 .collect(),
         )
     }
+
+    pub fn with_property(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        let key = key.into();
+        let value = value.into();
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            self.values.insert(key.clone(), trimmed.to_owned());
+        }
+        self.environment.insert(key, value);
+        self
+    }
     #[cfg(feature = "host")]
     pub fn with_environment(
         locator: &ConfigLocator,
@@ -578,5 +589,22 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_config_snapshot_with_property() {
+        let snapshot = ConfigSnapshot::from_values(std::collections::BTreeMap::new())
+            .with_property("VED_CONFIG_DIR", "/explicit/config/dir");
+        assert_eq!(
+            snapshot.get_prop("VED_CONFIG_DIR", ""),
+            "/explicit/config/dir"
+        );
+        assert_eq!(
+            snapshot
+                .environment()
+                .get("VED_CONFIG_DIR")
+                .map(|s| s.as_str()),
+            Some("/explicit/config/dir")
+        );
     }
 }
