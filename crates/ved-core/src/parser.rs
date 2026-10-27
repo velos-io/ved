@@ -183,6 +183,9 @@ fn canonical_dependency(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 fn is_starlark(path: &Path, content: &str) -> bool {
+    if crate::shorthand::is_shorthand_content(path, content) {
+        return false;
+    }
     let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
     content.contains("from ved import")
         || content.contains("app = App(")

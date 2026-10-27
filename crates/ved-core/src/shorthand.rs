@@ -19,12 +19,15 @@ pub fn is_shorthand(path: &Path) -> bool {
         .unwrap_or(false)
 }
 pub(crate) fn is_shorthand_content(path: &Path, content: &str) -> bool {
+    if content.contains("from ved import")
+        || content.contains("app = App(")
+        || content.contains("apiVersion:")
+    {
+        return false;
+    }
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
     if ext == "ved" {
         return true;
-    }
-    if content.contains("from ved import") || content.contains("apiVersion:") {
-        return false;
     }
     content.lines().any(|line| {
         let t = line.trim();
