@@ -103,12 +103,10 @@ pub fn generate_compose_validated_with_context(
     let (active_workloads, healthy_workloads) = collect_active_workloads(spec);
     let mut services = IndexMap::new();
 
-    let compose_file_path = context.compose_file_path();
-    let compose_dir = compose_file_path.parent().unwrap_or_else(|| context.root());
     let effective_env_files: Vec<String> = spec
         .env_files
         .iter()
-        .map(|f| rebase_env_file(f, context.root(), compose_dir))
+        .map(|f| rebase_env_file(f, context.root(), context.root()))
         .collect();
 
     for (name, svc) in &spec.services {
@@ -126,7 +124,6 @@ pub fn generate_compose_validated_with_context(
                 Some(&ingress_suffix),
                 &effective_env_files,
                 context.root(),
-                compose_dir,
             );
             services.insert(name.clone(), service);
         }
@@ -164,7 +161,6 @@ pub fn generate_compose_validated_with_context(
                     Some(&ingress_suffix),
                     &effective_env_files,
                     context.root(),
-                    compose_dir,
                 );
                 services.insert(name.clone(), service);
             }
@@ -293,7 +289,6 @@ pub fn build_compose_service(
         None,
         &validated.as_spec().env_files,
         empty_root,
-        empty_root,
     );
     match serde_yaml::to_value(&svc)? {
         Value::Mapping(m) => Ok(m),
@@ -383,7 +378,6 @@ fn build_compose_service_typed(
     ingress_suffix: Option<&str>,
     effective_env_files: &[String],
     root: &Path,
-    compose_dir: &Path,
 ) -> ComposeService {
     let entrypoint = workload.entrypoint().and_then(|cmd| {
         let v = format_command_value(cmd);
@@ -395,7 +389,7 @@ fn build_compose_service_typed(
     });
     let ports = build_ports_value(workload.ports(), &svc.ports);
     let svc_env_files = if let Some(ref ef) = svc.env_file {
-        vec![rebase_env_file(ef, root, compose_dir)]
+        vec![rebase_env_file(ef, root, root)]
     } else {
         effective_env_files.to_vec()
     };
@@ -1643,8 +1637,8 @@ mod tests {
         assert_eq!(
             env_file,
             &Value::Sequence(vec![
-                Value::String("../config/.env".to_string()),
-                Value::String("../config/.local.env".to_string()),
+                Value::String("config/.env".to_string()),
+                Value::String("config/.local.env".to_string()),
             ])
         );
 

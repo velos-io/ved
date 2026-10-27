@@ -58,6 +58,12 @@ cat "$demo_dir/dist/docker-compose.yml"
 
 The output contains the `web` service, its `nginx:alpine` image and the `8080:80` port mapping. Explicit paths keep configuration, state and generated files in the temporary workspace. Use `--target k8s`, `--target helm` or `--target all` for other outputs. An explicitly selected configuration directory must already exist.
 
+### Directory scopes and projection
+- **Working directory (`--dir` / `-d`, default `.`):** Anchors the workspace root. Docker Compose passes this root via `--project-directory`; all relative paths inside the generated Compose file (including `env_file` and build contexts) resolve relative to this directory.
+- **Config directory (`--config-dir`, default `{dir}/config`):** Holds specification environments (`.env`, `.local.env`) and catalogs. Paths declared in specifications resolve relative to the working directory root.
+- **Work directory (`--work-dir`, default `{dir}/.ved`):** Stores ephemeral runtime state and metadata (`state.json`, `.generated.env`, and default `docker-compose.yml`). Its location never shifts Compose path resolution.
+- **Output directory (`--output-dir` / `-o`):** Redirects final compiled artifacts when specified, keeping them separate from runtime state.
+
 ## Specifications and deployment
 
 File loading supports YAML, Starlark (`Vedfile`, `.star`, or `.py`) and shorthand (`.ved`). A `.py` specification uses Starlark syntax, not unrestricted Python. Start with the [examples](examples/README.md) for richer workloads, configuration and optional deployment.

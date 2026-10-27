@@ -222,3 +222,38 @@ fn test_ac6_read_only_root_execution() {
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_ac7_compose_env_file_anchored_to_working_directory() {
+    let tmp = std::env::temp_dir().join(format!("test_ac7_{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp);
+    let root = tmp.join("app");
+    fs::create_dir_all(&root).unwrap();
+    create_sample_spec(&root);
+
+    // 1. Default compile (writes to .ved/docker-compose.yml)
+    let status = support::command(get_ved_bin(), &tmp)
+        .arg("-d")
+        .arg(&root)
+        .args(["compile", "-t", "compose"])
+        .status()
+        .expect("run compile");
+    assert!(status.success(), "default compile failed");
+
+    let compose_path = root.join(".ved/docker-compose.yml");
+    let content = fs::read_to_string(&compose_path).expect("read compose file");
+    let parsed: serde_yaml::Value = serde_yaml::from_str(&content).expect("parse compose YAML");
+    let env_file = &parsed["services"]["api"]["env_file"];
+
+    // env_file must be anchored to working directory (root), NOT .ved
+    assert_eq!(
+        env_file,
+        &serde_yaml::Value::Sequence(vec![
+            serde_yaml::Value::String("config/.env".to_string()),
+            serde_yaml::Value::String("config/.local.env".to_string()),
+        ]),
+        "env_file in .ved/docker-compose.yml must be 'config/.env', not '../config/.env'"
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}

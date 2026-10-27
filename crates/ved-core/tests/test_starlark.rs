@@ -171,8 +171,8 @@ fn test_centralised_env_files() {
         .and_then(|v| v.as_sequence())
         .expect("env_file sequence");
     assert_eq!(env_file.len(), 2);
-    assert_eq!(env_file[0].as_str(), Some("../config/.env"));
-    assert_eq!(env_file[1].as_str(), Some("../config/.local.env"));
+    assert_eq!(env_file[0].as_str(), Some("config/.env"));
+    assert_eq!(env_file[1].as_str(), Some("config/.local.env"));
 }
 
 #[test]
