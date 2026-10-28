@@ -335,6 +335,7 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
     let mut app_kwargs = vec![
         ("name".to_string(), Expr::Literal(app_name.to_string())),
         ("version".to_string(), Expr::Literal("0.1.0".to_string())),
+        ("env_files".to_string(), Expr::List(Vec::new())),
     ];
     if let Some(networks_val) = root.get("networks") {
         if let Some(m) = networks_val.as_mapping() {
@@ -577,6 +578,24 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
             }
         }
 
+        if let Some(expose_val) = svc_data.get("expose").and_then(|v| v.as_sequence()) {
+            let expose_items: Vec<Expr> = expose_val
+                .iter()
+                .filter_map(|v| {
+                    if let Some(s) = v.as_str() {
+                        Some(Expr::Literal(s.to_string()))
+                    } else if let Some(n) = v.as_i64() {
+                        Some(Expr::Literal(n.to_string()))
+                    } else {
+                        v.as_u64().map(|n| Expr::Literal(n.to_string()))
+                    }
+                })
+                .collect();
+            if !expose_items.is_empty() {
+                svc_kwargs.push(("expose".to_string(), Expr::List(expose_items)));
+            }
+        }
+
         let mut env_map = BTreeMap::new();
         if let Some(env_val) = svc_data.get("environment") {
             if let Some(m) = env_val.as_mapping() {
@@ -611,6 +630,21 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                 })
                 .collect();
             svc_kwargs.push(("env".to_string(), Expr::Dict(env_entries)));
+        }
+
+        if let Some(ef) = svc_data.get("env_file") {
+            if let Some(s) = ef.as_str() {
+                svc_kwargs.push(("env_file".to_string(), Expr::Literal(s.to_string())));
+            } else if let Some(seq) = ef.as_sequence() {
+                let items: Vec<Expr> = seq
+                    .iter()
+                    .filter_map(|v| v.as_str())
+                    .map(|s| Expr::Literal(s.to_string()))
+                    .collect();
+                if !items.is_empty() {
+                    svc_kwargs.push(("env_file".to_string(), Expr::List(items)));
+                }
+            }
         }
 
         let mut wait_for = Vec::new();
@@ -703,31 +737,44 @@ pub fn convert_compose_to_ved(compose_path: &Path, app_name: &str) -> Result<Str
                                 },
                             ));
                         } else if parts[0] == "CMD-SHELL" && parts.len() > 1 {
-                            let cmd_str = parts[1..].join(" ");
-                            if (cmd_str.starts_with("wget -qO- http://localhost")
-                                || cmd_str.starts_with("wget -qO- http://127.0.0.1"))
-                                && !cmd_str.contains('\n')
-                            {
-                                let path = extract_http_path(&cmd_str);
-                                svc_kwargs.push((
-                                    "health".to_string(),
-                                    Expr::Call {
-                                        target: "Health.http".to_string(),
-                                        args: vec![Expr::Literal(path)],
-                                        kwargs: timing_kwargs,
-                                    },
-                                ));
-                            } else {
-                                let arg_expr = if cmd_str.contains('\n') {
-                                    Expr::Multiline(cmd_str)
+                            if parts.len() == 2 {
+                                let cmd_str = parts[1];
+                                if (cmd_str.starts_with("wget -qO- http://localhost")
+                                    || cmd_str.starts_with("wget -qO- http://127.0.0.1"))
+                                    && !cmd_str.contains('\n')
+                                {
+                                    let path = extract_http_path(cmd_str);
+                                    svc_kwargs.push((
+                                        "health".to_string(),
+                                        Expr::Call {
+                                            target: "Health.http".to_string(),
+                                            args: vec![Expr::Literal(path)],
+                                            kwargs: timing_kwargs,
+                                        },
+                                    ));
                                 } else {
-                                    Expr::Literal(cmd_str)
-                                };
+                                    let arg_expr = if cmd_str.contains('\n') {
+                                        Expr::Multiline(cmd_str.to_string())
+                                    } else {
+                                        Expr::Literal(cmd_str.to_string())
+                                    };
+                                    svc_kwargs.push((
+                                        "health".to_string(),
+                                        Expr::Call {
+                                            target: "Health.exec".to_string(),
+                                            args: vec![arg_expr],
+                                            kwargs: timing_kwargs,
+                                        },
+                                    ));
+                                }
+                            } else {
+                                let list_items: Vec<Expr> =
+                                    parts.iter().map(|s| Expr::Literal(s.to_string())).collect();
                                 svc_kwargs.push((
                                     "health".to_string(),
                                     Expr::Call {
                                         target: "Health.exec".to_string(),
-                                        args: vec![arg_expr],
+                                        args: vec![Expr::List(list_items)],
                                         kwargs: timing_kwargs,
                                     },
                                 ));
@@ -1567,5 +1614,124 @@ networks:
         assert!(compose_out.contains("target: /data"));
         assert!(compose_out.contains("internal: true"));
         assert!(compose_out.contains("custom-alias"));
+    }
+
+    #[test]
+    fn test_ved006_compose_import_fidelity() {
+        let yaml = r#"
+name: ved006-test
+services:
+  coordinator:
+    image: trinodb/trino:476
+    expose:
+      - "8080"
+      - "8443"
+  kafka:
+    image: bitnami/kafka:3.4.1
+    healthcheck:
+      test: ["CMD-SHELL", "bash", "-c", "kafka-topics.sh", "--list", "--bootstrap.server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  custom:
+    image: alpine:latest
+    env_file: custom.env
+  unspecified:
+    image: alpine:latest
+"#;
+        let tmp = std::env::temp_dir().join(format!("compose_ved006_{}.yml", std::process::id()));
+        fs::write(&tmp, yaml).unwrap();
+
+        let starlark = convert_compose_to_ved(&tmp, "ved006-test").unwrap();
+        let _ = fs::remove_file(&tmp);
+
+        assert!(starlark.contains("env_files=[]"));
+        assert!(starlark.contains("expose=[\"8080\", \"8443\"]"));
+        assert!(starlark.contains("env_file=\"custom.env\""));
+        assert!(starlark.contains("[\"CMD-SHELL\", \"bash\", \"-c\", \"kafka-topics.sh\", \"--list\", \"--bootstrap.server\", \"localhost:9092\"]"));
+
+        let tmp_ved = std::env::temp_dir().join(format!("Vedfile_ved006_{}", std::process::id()));
+        fs::write(&tmp_ved, &starlark).unwrap();
+        let spec = crate::starlark::load_starlark_spec(&tmp_ved)
+            .expect("Failed to evaluate Starlark for VED006");
+        let _ = fs::remove_file(&tmp_ved);
+
+        assert_eq!(spec.env_files, Vec::<String>::new());
+        assert_eq!(
+            spec.services["coordinator"].expose,
+            vec![serde_json::json!("8080"), serde_json::json!("8443")]
+        );
+        assert_eq!(
+            spec.services["custom"].env_file,
+            Some(serde_json::json!("custom.env"))
+        );
+        assert_eq!(spec.services["unspecified"].env_file, None);
+
+        let validated = crate::validated::ValidatedSpec::try_from(&spec).unwrap();
+        let tmp_dir = std::env::temp_dir().join(format!("ved006_ctx_{}", std::process::id()));
+        let _ = fs::create_dir_all(tmp_dir.join("config"));
+        fs::write(
+            tmp_dir.join("config/.env"),
+            "DEPLOYMENT_TARGET=compose\nVED_AUTO_BUILD=false\n",
+        )
+        .unwrap();
+
+        let locator = crate::ConfigLocator::new(
+            tmp_dir.join("config"),
+            tmp_dir.join("config/.generated.env"),
+        );
+        let snapshot = crate::ConfigSnapshot::capture(&locator);
+        let ctx = crate::WorkspaceContext::with_snapshot(
+            tmp_dir.clone(),
+            tmp_dir.join("config"),
+            tmp_dir.join(".ved"),
+            None,
+            tmp_dir.join("config/.generated.env"),
+            snapshot,
+        );
+
+        let compose_out = crate::compose::generate_compose_validated_with_context(&validated, &ctx)
+            .expect("generate compose from validated spec");
+        let _ = fs::remove_dir_all(&tmp_dir);
+
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&compose_out).unwrap();
+        let svcs = parsed["services"].as_mapping().unwrap();
+
+        // 1. Global config isolation: unspecified service has no env_file
+        let unspec_svc = &svcs[&serde_yaml::Value::String("unspecified".into())];
+        assert!(unspec_svc.get("env_file").is_none());
+
+        // 2. Custom service has its own env_file
+        let custom_svc = &svcs[&serde_yaml::Value::String("custom".into())];
+        assert_eq!(
+            custom_svc["env_file"],
+            serde_yaml::Value::Sequence(vec![serde_yaml::Value::String("custom.env".into())])
+        );
+
+        // 3. Coordinator has expose and no env_file
+        let coord_svc = &svcs[&serde_yaml::Value::String("coordinator".into())];
+        assert!(coord_svc.get("env_file").is_none());
+        assert_eq!(
+            coord_svc["expose"],
+            serde_yaml::Value::Sequence(vec![
+                serde_yaml::Value::String("8080".into()),
+                serde_yaml::Value::String("8443".into())
+            ])
+        );
+
+        // 4. Kafka preserves full CMD-SHELL argv list
+        let kafka_svc = &svcs[&serde_yaml::Value::String("kafka".into())];
+        assert_eq!(
+            kafka_svc["healthcheck"]["test"],
+            serde_yaml::Value::Sequence(vec![
+                serde_yaml::Value::String("CMD-SHELL".into()),
+                serde_yaml::Value::String("bash".into()),
+                serde_yaml::Value::String("-c".into()),
+                serde_yaml::Value::String("kafka-topics.sh".into()),
+                serde_yaml::Value::String("--list".into()),
+                serde_yaml::Value::String("--bootstrap.server".into()),
+                serde_yaml::Value::String("localhost:9092".into()),
+            ])
+        );
     }
 }

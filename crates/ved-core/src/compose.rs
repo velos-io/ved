@@ -58,6 +58,8 @@ pub struct ComposeService {
     pub shm_size: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ulimits: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expose: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -388,8 +390,17 @@ fn build_compose_service_typed(
         (v != Value::Null).then_some(v)
     });
     let ports = build_ports_value(workload.ports(), &svc.ports);
-    let svc_env_files = if let Some(ref ef) = svc.env_file {
-        vec![rebase_env_file(ef, root, root)]
+    let svc_env_files: Vec<String> = if let Some(ref ef) = svc.env_file {
+        if let Some(s) = ef.as_str() {
+            vec![rebase_env_file(s, root, root)]
+        } else if let Some(arr) = ef.as_array() {
+            arr.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| rebase_env_file(s, root, root))
+                .collect()
+        } else {
+            Vec::new()
+        }
     } else {
         effective_env_files.to_vec()
     };
@@ -415,6 +426,7 @@ fn build_compose_service_typed(
     let deploy = svc.deploy.as_ref().map(json_to_yaml_value);
     let shm_size = svc.shm_size.as_ref().map(json_to_yaml_value);
     let ulimits = svc.ulimits.as_ref().map(json_to_yaml_value);
+    let expose = build_expose_value(&svc.expose);
 
     ComposeService {
         image: svc.image.clone(),
@@ -435,6 +447,7 @@ fn build_compose_service_typed(
         deploy,
         shm_size,
         ulimits,
+        expose,
     }
 }
 
@@ -489,6 +502,7 @@ fn build_compose_job_typed(
     let deploy = job.deploy.as_ref().map(json_to_yaml_value);
     let shm_size = job.shm_size.as_ref().map(json_to_yaml_value);
     let ulimits = job.ulimits.as_ref().map(json_to_yaml_value);
+    let expose = build_expose_value(&job.expose);
 
     ComposeService {
         image: Some(job.image.clone()),
@@ -509,6 +523,7 @@ fn build_compose_job_typed(
         deploy,
         shm_size,
         ulimits,
+        expose,
     }
 }
 
@@ -663,6 +678,23 @@ fn build_ports_value(ports: &[PortSpec], raw_ports: &[serde_json::Value]) -> Opt
 
 fn build_env_file_value(env_files: &[String]) -> Option<Vec<String>> {
     (!env_files.is_empty()).then(|| env_files.to_vec())
+}
+
+fn build_expose_value(raw_expose: &[serde_json::Value]) -> Option<Vec<String>> {
+    if raw_expose.is_empty() {
+        return None;
+    }
+    let mut result = Vec::new();
+    for v in raw_expose {
+        if let Some(s) = v.as_str() {
+            result.push(s.to_string());
+        } else if let Some(n) = v.as_i64() {
+            result.push(n.to_string());
+        } else if let Some(n) = v.as_u64() {
+            result.push(n.to_string());
+        }
+    }
+    (!result.is_empty()).then_some(result)
 }
 
 /// Computes a relative path from `from` directory to `to` path.

@@ -166,6 +166,7 @@ impl Default for ServiceSpec {
             ingress: None,
             env: IndexMap::new(),
             env_file: None,
+            expose: Vec::new(),
             mounts: Vec::new(),
             security: None,
             health: None,
@@ -1249,7 +1250,9 @@ pub struct ServiceSpec {
     #[serde(default)]
     pub env: IndexMap<String, serde_json::Value>,
     #[serde(default)]
-    pub env_file: Option<String>,
+    pub env_file: Option<serde_json::Value>,
+    #[serde(default)]
+    pub expose: Vec<serde_json::Value>,
     #[serde(default)]
     pub mounts: Vec<String>,
     #[serde(default)]
@@ -1422,6 +1425,8 @@ pub struct JobSpec {
     pub ulimits: Option<serde_json::Value>,
     #[serde(default)]
     pub networks: Option<serde_json::Value>,
+    #[serde(default)]
+    pub expose: Vec<serde_json::Value>,
 }
 
 impl Default for JobSpec {
@@ -1445,6 +1450,7 @@ impl Default for JobSpec {
             shm_size: None,
             ulimits: None,
             networks: None,
+            expose: Vec::new(),
         }
     }
 }

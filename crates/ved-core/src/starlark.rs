@@ -170,6 +170,7 @@ def Service(
     build=None,
     group="default",
     ports=[],
+    expose=[],
     memory=None,
     ingress=None,
     env={},
@@ -197,6 +198,7 @@ def Service(
         build=build,
         group=group,
         ports=ports,
+        expose=expose,
         memory=memory,
         ingress=ingress,
         env=env,
@@ -236,6 +238,7 @@ def Job(
     deploy=None,
     shm_size=None,
     ulimits=None,
+    expose=[],
 ):
     norm_wait = [_normalize_wait(w) for w in wait_for]
     act_enabled = _is_enabled(name, enabled)
@@ -258,6 +261,7 @@ def Job(
         deploy=deploy,
         shm_size=shm_size,
         ulimits=ulimits,
+        expose=expose,
     )
 
 def App(name, version, network="default", ingress_suffix=None, env_files=None, config_dir=None, networks=None):
@@ -344,6 +348,7 @@ def _stack_services_to_dict(services):
             "build": s.build,
             "group": s.group,
             "ports": s.ports,
+            "expose": s.expose,
             "memory": s.memory,
             "ingress": s.ingress,
             "env": s.env,
@@ -373,6 +378,7 @@ def _app_to_spec(app):
             "build": s.build,
             "group": s.group,
             "ports": s.ports,
+            "expose": s.expose,
             "memory": s.memory,
             "ingress": s.ingress,
             "env": s.env,
@@ -413,6 +419,7 @@ def _app_to_spec(app):
             "deploy": j.deploy,
             "shm_size": j.shm_size,
             "ulimits": j.ulimits,
+            "expose": j.expose,
         }
 
     profiles_map = {}
@@ -424,6 +431,7 @@ def _app_to_spec(app):
                 "build": s.build,
                 "group": s.group,
                 "ports": s.ports,
+                "expose": s.expose,
                 "memory": s.memory,
                 "ingress": s.ingress,
                 "env": s.env,
