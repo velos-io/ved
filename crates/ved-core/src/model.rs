@@ -853,15 +853,33 @@ pub struct MountSpec {
 }
 
 pub fn sanitize_volume_name(path: &str) -> String {
-    let clean = path
+    let clean: String = path
         .trim_start_matches("./")
         .trim_start_matches('/')
-        .replace(['/', '.', '_'], "-");
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_lowercase() || c.is_ascii_digit() {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
     let trimmed = clean.trim_matches('-');
     if trimmed.is_empty() {
+        return "vol-data".to_string();
+    }
+    let max_suffix_len = 63 - "vol-".len();
+    let suffix = if trimmed.len() > max_suffix_len {
+        trimmed[trimmed.len() - max_suffix_len..].trim_start_matches('-')
+    } else {
+        trimmed
+    };
+    if suffix.is_empty() {
         "vol-data".to_string()
     } else {
-        format!("vol-{trimmed}")
+        format!("vol-{suffix}")
     }
 }
 
@@ -1730,6 +1748,9 @@ mod tests {
         assert_eq!(sanitize_volume_name("/var/log/app"), "vol-var-log-app");
         assert_eq!(sanitize_volume_name("./"), "vol-data");
         assert_eq!(sanitize_volume_name(""), "vol-data");
+        let long_path = "/Users/Developer/projects/products/ved/examples/nginx-postgres-otel/.ved/stacks/otel/config/otel-collector-config.yaml";
+        let sanitized_long = sanitize_volume_name(long_path);
+        assert!(is_valid_dns1123_label(&sanitized_long));
     }
 
     #[test]

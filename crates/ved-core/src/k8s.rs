@@ -581,8 +581,7 @@ pub fn render_k8s_validated_with_plan(
         ("tools".into(), vec!["ingress-nginx.yaml".into()]),
     ]);
     let mut ingress_patches = Vec::new();
-    let mut infra_sec_patches = Vec::new();
-    let mut agent_sec_patches = Vec::new();
+    let mut patches_by_group = BTreeMap::<String, Vec<YamlNode>>::new();
     for (name, svc) in &spec.services {
         if !svc.enabled.unwrap_or(true) {
             continue;
@@ -593,15 +592,20 @@ pub fn render_k8s_validated_with_plan(
             format!("base/{group}/{name}.yaml"),
             &build_service_manifest(name, svc, &ingress_suffix, validated)?,
         )?;
-        group_resources
+        let entries = group_resources.entry(group.clone()).or_default();
+        if !entries.iter().any(|item| item == "secrets.yaml") {
+            write_yaml(
+                &mut output,
+                format!("base/{group}/secrets.yaml"),
+                &secrets_yaml,
+            )?;
+            entries.insert(0, "secrets.yaml".into());
+        }
+        entries.push(format!("{name}.yaml"));
+        patches_by_group
             .entry(group.clone())
             .or_default()
-            .push(format!("{name}.yaml"));
-        if group == "infra" {
-            infra_sec_patches.push(security_patch(name, "Deployment"));
-        } else if group == "agent" {
-            agent_sec_patches.push(security_patch(name, "Deployment"));
-        }
+            .push(security_patch(name, "Deployment"));
         if svc.ingress.is_some() && group == "agent" {
             let port = validated
                 .workload(None, name)
@@ -623,12 +627,20 @@ pub fn render_k8s_validated_with_plan(
             format!("base/{group}/{name}.yaml"),
             &build_job_manifest(name, job, validated)?,
         )?;
-        group_resources
+        let entries = group_resources.entry(group.clone()).or_default();
+        if !entries.iter().any(|item| item == "secrets.yaml") {
+            write_yaml(
+                &mut output,
+                format!("base/{group}/secrets.yaml"),
+                &secrets_yaml,
+            )?;
+            entries.insert(0, "secrets.yaml".into());
+        }
+        entries.push(format!("{name}.yaml"));
+        patches_by_group
             .entry(group.clone())
             .or_default()
-            .push(format!("{name}.yaml"));
-        if group == "infra" {
-            infra_sec_patches.push(security_patch(
+            .push(security_patch(
                 name,
                 if job.schedule.is_some() {
                     "CronJob"
@@ -636,7 +648,6 @@ pub fn render_k8s_validated_with_plan(
                     "Job"
                 },
             ));
-        }
     }
     for (group, resources) in &group_resources {
         write_yaml(
@@ -664,9 +675,6 @@ pub fn render_k8s_validated_with_plan(
         "base/kustomization.yaml",
         &render_documents(&[kustomization(root_resources, None, &[])])?,
     )?;
-    let mut patches_by_group = BTreeMap::<String, Vec<YamlNode>>::new();
-    patches_by_group.insert("infra".into(), infra_sec_patches);
-    patches_by_group.insert("agent".into(), agent_sec_patches);
     patches_by_group.insert("__ingress".into(), ingress_patches);
     for namespace in plan.namespaces() {
         let groups = plan.groups_for_namespace(&namespace);
@@ -1408,6 +1416,42 @@ mod tests {
             container["args"],
             serde_yaml::to_value(vec!["run", "server"]).unwrap()
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn test_custom_group_receives_secrets_and_local_security_patch() {
+        let mut services = indexmap::IndexMap::new();
+        services.insert(
+            "db".to_string(),
+            ServiceSpec {
+                image: Some("postgres:16-alpine".to_string()),
+                group: "core".to_string(),
+                port: Some(5432),
+                ..Default::default()
+            },
+        );
+        let spec = AppSpec {
+            app: "custom-group-k8s-test".to_string(),
+            version: "1.0.0".to_string(),
+            services,
+            ..Default::default()
+        };
+
+        let tmp =
+            std::env::temp_dir().join(format!("k8s_test_custom_group_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        generate_k8s(&spec, &tmp).expect("generate_k8s");
+
+        assert!(tmp.join("base/core/secrets.yaml").exists());
+        let base_kustom = fs::read_to_string(tmp.join("base/core/kustomization.yaml")).unwrap();
+        assert!(base_kustom.contains("secrets.yaml"));
+        assert!(base_kustom.contains("db.yaml"));
+        assert!(tmp
+            .join("overlays/local/core/local-security-patch.yaml")
+            .exists());
 
         let _ = fs::remove_dir_all(&tmp);
     }

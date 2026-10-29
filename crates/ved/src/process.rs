@@ -289,9 +289,12 @@ pub(crate) fn compose_cmd_with_ctx(ctx: &WorkspaceContext) -> CommandBuilder {
         .arg("-f")
         .arg(layout.compose_file);
     let locator = ctx.config_locator();
-    for path in [locator.env_file(), locator.local_env_file()] {
-        if path.exists() {
-            cmd = cmd.arg("--env-file").arg(path);
+    let project_env = ctx.root().join(ved_core::r::files::ENV_FILE);
+    let mut env_files = Vec::new();
+    for path in [project_env, locator.env_file(), locator.local_env_file()] {
+        if path.exists() && !env_files.contains(&path) {
+            cmd = cmd.arg("--env-file").arg(&path);
+            env_files.push(path);
         }
     }
     cmd

@@ -17,24 +17,24 @@ OCI runtime exec failed: exec: "/bin/sh": stat /bin/sh: no such file or director
 Using an array in `Health.exec`:
 
 ```python
-health = Health.exec(["cerbos", "healthcheck"])
+health = Health.exec(["/cerbos", "healthcheck"])
 ```
 
 Ved compiles this directly into the native exec form without shell invocation:
-- **Docker Compose**: `["CMD", "cerbos", "healthcheck"]`
-- **Kubernetes**: `exec.command = ["cerbos", "healthcheck"]`
+- **Docker Compose**: `["CMD", "/cerbos", "healthcheck"]`
+- **Kubernetes**: `exec.command = ["/cerbos", "healthcheck"]`
 
 ## Entrypoint & Command Support
 
 Ved supports custom entrypoints and commands for containers:
 
 ```python
-entrypoint = ["cerbos"]
-command = ["server", "--config=/dev/null"]
+entrypoint = ["/cerbos"]
+command = ["server", "--config=__default__"]
 ```
 
-- **Docker Compose**: Emitted as `entrypoint: ["cerbos"]` and `command: ["server", "--config=/dev/null"]`.
-- **Kubernetes**: Emitted as `command: ["cerbos"]` and `args: ["server", "--config=/dev/null"]`.
+- **Docker Compose**: Emitted as `entrypoint: ["/cerbos"]` and `command: ["server", "--config=__default__"]`.
+- **Kubernetes**: Emitted as `command: ["/cerbos"]` and `args: ["server", "--config=__default__"]`.
 
 ## Compilation
 

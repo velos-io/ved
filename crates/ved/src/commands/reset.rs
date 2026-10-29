@@ -61,7 +61,19 @@ pub(crate) fn run_reset_k8s_with_output(
     output: &dyn Outputter,
 ) -> Result<()> {
     let resolver = ctx.namespace_resolver(slot);
-    let namespaces = resolver.known_namespaces();
+    let mut namespaces = resolver.known_namespaces();
+    let spec_path = ctx.spec_path(None);
+    if spec_path.exists() {
+        if let Ok(loaded) =
+            ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())
+        {
+            for ns in resolver.all_namespaces(&loaded.spec) {
+                if !namespaces.contains(&ns) {
+                    namespaces.push(ns);
+                }
+            }
+        }
+    }
 
     output.println(&format!("reset: deleting k8s namespaces for slot {slot}"));
     deployer.reset_k8s(ctx, &namespaces)?;

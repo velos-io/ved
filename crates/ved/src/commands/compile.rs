@@ -93,7 +93,7 @@ pub(crate) fn run_compile_with_lease_and_output(
 
     if matches!(target, CompileTarget::Compose | CompileTarget::All) {
         let bytes = compiler.compile_compose(&spec)?.into_bytes();
-        insert_single(&mut updates, "compose", &layout.compose_file, bytes)?;
+        insert_compose_artifacts(ctx, &mut updates, &layout.compose_file, bytes)?;
         insert_single(
             &mut updates,
             "generated-env",
@@ -261,6 +261,38 @@ fn generated_env_content(
     text.into_bytes()
 }
 
+fn insert_compose_artifacts(
+    ctx: &WorkspaceContext,
+    updates: &mut BTreeMap<String, ScopeUpdate>,
+    destination: &Path,
+    bytes: Vec<u8>,
+) -> Result<()> {
+    let root = destination
+        .parent()
+        .ok_or_else(|| {
+            CliError::validation_failed(destination, "artifact has no parent directory")
+        })?
+        .to_path_buf();
+    let relative = destination
+        .file_name()
+        .ok_or_else(|| CliError::validation_failed(destination, "artifact has no file name"))?;
+    let mut files = BTreeMap::from([(PathBuf::from(relative), bytes)]);
+    let project_env = ctx.root().join(ved_core::r::files::ENV_FILE);
+    let target_env = root.join(ved_core::r::files::ENV_FILE);
+    if root != ctx.root()
+        && target_env != project_env
+        && target_env != ctx.config_locator().env_file()
+        && fs::symlink_metadata(&project_env).is_ok_and(|meta| meta.file_type().is_file())
+    {
+        files.insert(
+            PathBuf::from(ved_core::r::files::ENV_FILE),
+            fs::read(&project_env)?,
+        );
+    }
+    updates.insert("compose".into(), ScopeUpdate { root, files });
+    Ok(())
+}
+
 fn insert_single(
     updates: &mut BTreeMap<String, ScopeUpdate>,
     name: &str,
@@ -395,13 +427,21 @@ pub(crate) fn fingerprint(
         hasher.update(&dependency.bytes);
         hasher.update(&[0]);
     }
-    for env_file in &loaded.spec.env_files {
-        let path = Path::new(env_file);
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            ctx.root().join(path)
-        };
+    let project_env = ctx.root().join(ved_core::r::files::ENV_FILE);
+    for path in loaded
+        .spec
+        .env_files
+        .iter()
+        .map(|env_file| {
+            let path = Path::new(env_file);
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                ctx.root().join(path)
+            }
+        })
+        .chain(std::iter::once(project_env))
+    {
         hasher.update(path.to_string_lossy().as_bytes());
         match fs::read(&path) {
             Ok(bytes) => {

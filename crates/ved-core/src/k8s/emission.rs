@@ -510,12 +510,19 @@ fn push_container_command_and_args(
             }
         }
     } else if let Some(command) = typed.command() {
-        let args = match command {
-            crate::model::CommandSpec::List(args) => args.clone(),
+        let (field, args) = match command {
+            crate::model::CommandSpec::List(args) => {
+                let field = if args.first().is_some_and(|first| first.starts_with('-')) {
+                    "args"
+                } else {
+                    "command"
+                };
+                (field, args.clone())
+            }
             crate::model::CommandSpec::String(command) => {
-                vec!["sh".into(), "-c".into(), command.clone()]
+                ("command", vec!["sh".into(), "-c".into(), command.clone()])
             }
         };
-        container.push(("command", strings(args)));
+        container.push((field, strings(args)));
     }
 }

@@ -627,3 +627,142 @@ app.services.add(Service(name="web", image="nginx:alpine", ports=[Port(80, host=
 
     let _ = fs::remove_dir_all(&tmp);
 }
+
+#[test]
+fn test_imported_compose_compile_preserves_project_dotenv_interpolation() {
+    use std::collections::BTreeMap;
+
+    fn parse_dotenv(path: &std::path::Path) -> BTreeMap<String, String> {
+        let mut map = BTreeMap::new();
+        if let Ok(content) = fs::read_to_string(path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() || trimmed.starts_with('#') {
+                    continue;
+                }
+                if let Some((k, v)) = trimmed.split_once('=') {
+                    map.insert(k.trim().to_string(), v.trim().to_string());
+                }
+            }
+        }
+        map
+    }
+
+    fn resolve_compose_service_env(
+        compose_path: &std::path::Path,
+        service_name: &str,
+    ) -> BTreeMap<String, String> {
+        let compose_dir = compose_path.parent().expect("compose parent dir");
+        let dotenv = parse_dotenv(&compose_dir.join(".env"));
+        let yaml: serde_yaml::Value =
+            serde_yaml::from_str(&fs::read_to_string(compose_path).expect("read compose"))
+                .expect("parse compose yaml");
+        let env_node = &yaml["services"][service_name]["environment"];
+        let mut resolved = BTreeMap::new();
+        if let Some(mapping) = env_node.as_mapping() {
+            for (k, v) in mapping {
+                if let Some(key) = k.as_str() {
+                    let raw = v.as_str().unwrap_or_default();
+                    let interpolated =
+                        ved_core::expand_env_vars_with(raw, |name| dotenv.get(name).cloned())
+                            .replace("${TASK_PATH}", "");
+                    resolved.insert(key.to_string(), interpolated);
+                }
+            }
+        }
+        resolved
+    }
+
+    let tmp = std::env::temp_dir().join(format!(
+        "ved_test_project_dotenv_interp_{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&tmp);
+    let project = tmp.join("project");
+    let config = tmp.join("config");
+    fs::create_dir_all(&project).unwrap();
+    fs::create_dir_all(&config).unwrap();
+
+    fs::write(
+        project.join(".env"),
+        "TASK_PATH=examples/txnsharing/tasks/2-prepare-merchants.yaml\n",
+    )
+    .unwrap();
+    let compose_source = project.join("docker-compose.yaml");
+    fs::write(
+        &compose_source,
+        r#"services:
+  datapipe:
+    image: datapipe:latest
+    environment:
+      TASK_PATH: ${TASK_PATH}
+"#,
+    )
+    .unwrap();
+
+    let ved_bin = env!("CARGO_BIN_EXE_ved");
+    for args in [
+        vec![
+            "--config-dir",
+            config.to_str().unwrap(),
+            "init",
+            "--from-compose",
+            compose_source.to_str().unwrap(),
+        ],
+        vec!["--config-dir", config.to_str().unwrap(), "validate"],
+        vec![
+            "--config-dir",
+            config.to_str().unwrap(),
+            "compile",
+            "-t",
+            "compose",
+        ],
+    ] {
+        let out = support::command(ved_bin, &tmp)
+            .args(&args)
+            .current_dir(&project)
+            .output()
+            .expect("run ved command");
+        assert!(out.status.success(), "ved command failed: {args:?}");
+    }
+
+    let compose_generated = project.join(".ved/docker-compose.yml");
+    assert!(
+        compose_generated.is_file(),
+        "generated compose file missing"
+    );
+    assert!(
+        project.join(".ved/.env").is_file(),
+        "generated compose directory must include project .env interpolation input"
+    );
+
+    let generated_yaml: serde_yaml::Value =
+        serde_yaml::from_str(&fs::read_to_string(&compose_generated).unwrap()).unwrap();
+    assert!(
+        generated_yaml["services"]["datapipe"]
+            .get("env_file")
+            .is_none(),
+        "isolated VED config must not be injected into service env_file"
+    );
+
+    let source_env = resolve_compose_service_env(&compose_source, "datapipe");
+    let generated_env = resolve_compose_service_env(&compose_generated, "datapipe");
+    assert!(
+        source_env
+            .get("TASK_PATH")
+            .is_some_and(|val| !val.is_empty()),
+        "source TASK_PATH must resolve to a non-empty value"
+    );
+    assert_eq!(
+        source_env.keys().collect::<Vec<_>>(),
+        generated_env.keys().collect::<Vec<_>>(),
+        "resolved environment key sets differed"
+    );
+    assert!(
+        source_env == generated_env,
+        "resolved generated environment differed from source environment for keys: {:?}",
+        source_env.keys().collect::<Vec<_>>()
+    );
+
+    let _ = fs::remove_dir_all(&tmp);
+}
