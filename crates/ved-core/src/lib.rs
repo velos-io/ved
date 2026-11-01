@@ -95,7 +95,7 @@ pub use vcs::{HostGitRunner, VcsDriver, VcsError, VcsOutput};
 pub use compose::generate_compose;
 pub use compose::{
     build_compose_healthcheck, build_compose_job, build_compose_service, build_compose_volumes,
-    extract_volume,
+    extract_volume, resolve_build_mapping, root_anchor_build_context,
 };
 
 pub use config::{

@@ -590,7 +590,7 @@ pub fn render_k8s_validated_with_plan(
         write_yaml(
             &mut output,
             format!("base/{group}/{name}.yaml"),
-            &build_service_manifest(name, svc, &ingress_suffix, validated)?,
+            &build_service_manifest(name, svc, &ingress_suffix, validated, context)?,
         )?;
         let entries = group_resources.entry(group.clone()).or_default();
         if !entries.iter().any(|item| item == "secrets.yaml") {
@@ -625,7 +625,7 @@ pub fn render_k8s_validated_with_plan(
         write_yaml(
             &mut output,
             format!("base/{group}/{name}.yaml"),
-            &build_job_manifest(name, job, validated)?,
+            &build_job_manifest(name, job, validated, context)?,
         )?;
         let entries = group_resources.entry(group.clone()).or_default();
         if !entries.iter().any(|item| item == "secrets.yaml") {
@@ -1452,6 +1452,92 @@ mod tests {
         assert!(tmp
             .join("overlays/local/core/local-security-patch.yaml")
             .exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn test_workspace_file_and_dir_mounts_materialize_as_configmaps_and_job_wait_for_emits_init_container(
+    ) {
+        let tmp =
+            std::env::temp_dir().join(format!("k8s_test_workspace_mounts_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(tmp.join("config")).unwrap();
+        fs::create_dir_all(tmp.join("sql")).unwrap();
+        fs::write(tmp.join("config/app.json"), "{\"env\":\"test\"}\n").unwrap();
+        fs::write(tmp.join("sql/V1__init.sql"), "CREATE TABLE t (id INT);\n").unwrap();
+
+        let mut services = indexmap::IndexMap::new();
+        services.insert(
+            "db".to_string(),
+            ServiceSpec {
+                image: Some("postgres:16-alpine".to_string()),
+                group: "infra".to_string(),
+                port: Some(5432),
+                ..Default::default()
+            },
+        );
+        services.insert(
+            "app".to_string(),
+            ServiceSpec {
+                image: Some("node:24-alpine".to_string()),
+                group: "agent".to_string(),
+                mounts: vec!["./config/app.json:/etc/app/config.json:ro".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let mut jobs = indexmap::IndexMap::new();
+        jobs.insert(
+            "migration".to_string(),
+            JobSpec {
+                image: "flyway/flyway:11-alpine".to_string(),
+                group: "agent".to_string(),
+                mounts: vec!["./sql:/flyway/sql:ro".to_string()],
+                wait_for: vec!["db.healthy".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let spec = AppSpec {
+            app: "workspace-mount-test".to_string(),
+            version: "1.0.0".to_string(),
+            services,
+            jobs,
+            ..Default::default()
+        };
+
+        let validated = crate::validated::ValidatedSpec::try_from(&spec).unwrap();
+        let context = crate::workspace::WorkspaceContext::new(&tmp);
+        let out_dir = tmp.join("k8s-out");
+        generate_k8s_validated_with_context(&validated, &context, &out_dir)
+            .expect("generate_k8s_validated_with_context");
+
+        let app_yaml = fs::read_to_string(out_dir.join("base/agent/app.yaml")).unwrap();
+        let app_cm = yaml_document(&app_yaml, "ConfigMap");
+        assert_eq!(
+            app_cm["data"]["config.json"].as_str(),
+            Some("{\"env\":\"test\"}\n")
+        );
+        let app_dep = yaml_document(&app_yaml, "Deployment");
+        assert_eq!(
+            app_dep["spec"]["template"]["spec"]["containers"][0]["volumeMounts"][0]["subPath"]
+                .as_str(),
+            Some("config.json")
+        );
+
+        let job_yaml = fs::read_to_string(out_dir.join("base/agent/migration.yaml")).unwrap();
+        let job_cm = yaml_document(&job_yaml, "ConfigMap");
+        assert_eq!(
+            job_cm["data"]["V1__init.sql"].as_str(),
+            Some("CREATE TABLE t (id INT);\n")
+        );
+        let job_doc = yaml_document(&job_yaml, "Job");
+        let init_cmd = job_doc["spec"]["template"]["spec"]["initContainers"][0]["command"][2]
+            .as_str()
+            .unwrap();
+        assert!(init_cmd.contains("until nc -z db.infra.svc.cluster.local 5432; do sleep 2; done"));
 
         let _ = fs::remove_dir_all(&tmp);
     }

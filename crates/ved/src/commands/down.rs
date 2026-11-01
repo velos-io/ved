@@ -61,7 +61,19 @@ pub(crate) fn run_down_k8s_with_output(
     output: &dyn Outputter,
 ) -> Result<()> {
     let resolver = ctx.namespace_resolver(slot);
-    let namespaces = resolver.known_namespaces();
+    let mut namespaces = resolver.known_namespaces();
+    let spec_path = ctx.spec_path(None);
+    if spec_path.exists() {
+        if let Ok(loaded) =
+            ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())
+        {
+            for ns in resolver.all_namespaces(&loaded.spec) {
+                if !namespaces.contains(&ns) {
+                    namespaces.push(ns);
+                }
+            }
+        }
+    }
 
     output.println(&format!(
         "down: scaling all deployments to zero in {}",
@@ -166,5 +178,31 @@ mod tests {
 
         let actions = mock.recorded_actions();
         assert_eq!(actions, vec![DeployAction::ComposeDown]);
+    }
+
+    #[test]
+    fn test_run_down_k8s_includes_custom_group_namespaces_from_spec() {
+        let tmp = std::env::temp_dir().join(format!("ved_down_custom_ns_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        std::fs::write(
+            tmp.join("ved.yaml"),
+            "app: custom-down\nversion: 0.1.0\nservices:\n  db:\n    image: postgres:16\n    group: core\n",
+        )
+        .unwrap();
+
+        let mock = MockDeployer::new();
+        let slot = Slot("1".to_string());
+        run_down_k8s_with(&mock, &tmp, &slot).expect("run_down_k8s_with custom group");
+
+        let actions = mock.recorded_actions();
+        assert!(actions.contains(&DeployAction::ScaleDeployments {
+            namespace: "core".to_string(),
+            replicas: 0,
+        }));
+        assert!(actions.contains(&DeployAction::DeleteJobsAll {
+            namespace: "core".to_string(),
+        }));
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

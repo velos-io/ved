@@ -82,6 +82,8 @@ jobs:
     image: curlimages/curl:8.6.0
     command: curl -f http://api-gateway:8080/smoke
     hook: post-install
+    waitFor:
+      - api-gateway:ready
 
   cleanup-job:
     image: postgres:16

@@ -83,6 +83,7 @@ app.jobs.add(
         image="curlimages/curl:8.6.0",
         command=["curl", "-f", "http://api-gateway:8080/smoke"],
         hook="post-install",
+        wait_for=["api-gateway.healthy"],
     ),
     Job(
         name="cleanup-job",

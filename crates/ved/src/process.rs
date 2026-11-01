@@ -77,6 +77,14 @@ impl ProcessError {
             _ => false,
         }
     }
+
+    pub fn is_no_objects_to_scale(&self) -> bool {
+        match self {
+            Self::ExecutionFailed { stderr, .. } => stderr.contains("no objects passed to scale"),
+            Self::Context { source, .. } => source.is_no_objects_to_scale(),
+            _ => false,
+        }
+    }
 }
 
 pub struct CommandBuilder {

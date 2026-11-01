@@ -41,6 +41,14 @@ pub trait Deployer {
         timeout_secs: u32,
     ) -> Result<()>;
     fn test_compose(&self, ctx: &WorkspaceContext, workload: &str) -> Result<()>;
+    fn prepare_k8s_service_image(
+        &self,
+        _ctx: &WorkspaceContext,
+        _name: &str,
+        _svc: &ved_core::ServiceSpec,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Default, Clone, Copy)]
@@ -117,7 +125,7 @@ impl Deployer for HostDeployer {
         replicas: u32,
     ) -> Result<()> {
         let replicas_arg = format!("--replicas={replicas}");
-        let res = command_with_ctx(ctx, ved_core::r::bins::KUBECTL)
+        match command_with_ctx(ctx, ved_core::r::bins::KUBECTL)
             .args([
                 "scale",
                 "deployment",
@@ -126,24 +134,45 @@ impl Deployer for HostDeployer {
                 namespace,
                 &replicas_arg,
             ])
-            .exec_visible();
-        res.map_err(|e| {
-            CliError::from(e.with_context(
+            .capture()
+            .exec()
+        {
+            Ok(out) => {
+                if let Some(stdout) = out.stdout {
+                    print!("{stdout}");
+                }
+                Ok(())
+            }
+            Err(e)
+                if e.is_missing_resource(&format!("namespace {namespace}"))
+                    || e.is_no_objects_to_scale() =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(CliError::from(e.with_context(
                 "scale deployments",
                 format!("namespace {namespace} to {replicas}"),
-            ))
-        })?;
-        Ok(())
+            ))),
+        }
     }
 
     fn delete_jobs_all(&self, ctx: &WorkspaceContext, namespace: &str) -> Result<()> {
-        let res = command_with_ctx(ctx, ved_core::r::bins::KUBECTL)
+        match command_with_ctx(ctx, ved_core::r::bins::KUBECTL)
             .args(["delete", "job", "--all", "-n", namespace])
-            .exec_visible();
-        res.map_err(|e| {
-            CliError::from(e.with_context("delete jobs", format!("all in namespace {namespace}")))
-        })?;
-        Ok(())
+            .capture()
+            .exec()
+        {
+            Ok(out) => {
+                if let Some(stdout) = out.stdout {
+                    print!("{stdout}");
+                }
+                Ok(())
+            }
+            Err(e) if e.is_missing_resource(&format!("namespace {namespace}")) => Ok(()),
+            Err(e) => Err(CliError::from(
+                e.with_context("delete jobs", format!("all in namespace {namespace}")),
+            )),
+        }
     }
 
     fn compose_up(&self, ctx: &WorkspaceContext, profiles: &[String]) -> Result<()> {
@@ -257,6 +286,97 @@ impl Deployer for HostDeployer {
             .args(["run", "--rm", workload])
             .exec_visible()
             .map_err(|e| CliError::from(e.with_context("run compose workload", workload)))?;
+        Ok(())
+    }
+
+    fn prepare_k8s_service_image(
+        &self,
+        ctx: &WorkspaceContext,
+        name: &str,
+        svc: &ved_core::ServiceSpec,
+    ) -> Result<()> {
+        let Some(build_val) = svc.build.as_deref() else {
+            return Ok(());
+        };
+        let image = svc.image.as_deref().unwrap_or(name);
+        let anchored = ved_core::root_anchor_build_context(build_val, ctx.root());
+        let mapping = ved_core::resolve_build_mapping(&anchored);
+        let context_dir = mapping
+            .get("context")
+            .and_then(|v| v.as_str())
+            .unwrap_or(".");
+        let dockerfile = mapping
+            .get("dockerfile")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Dockerfile");
+        let df_path = std::path::Path::new(context_dir).join(dockerfile);
+        let df_str = df_path.to_string_lossy().into_owned();
+
+        let mut build_cmd = command_with_ctx(ctx, ved_core::r::bins::DOCKER);
+        build_cmd = build_cmd.args(["build", "-t", image, "-f", &df_str]);
+        if let Some(serde_yaml::Value::Mapping(args_map)) = mapping.get("args") {
+            for (k, v) in args_map {
+                if let (Some(k_str), Some(v_str)) = (k.as_str(), v.as_str()) {
+                    build_cmd = build_cmd.args(["--build-arg", &format!("{k_str}={v_str}")]);
+                }
+            }
+        }
+        build_cmd
+            .arg(context_dir)
+            .exec_visible()
+            .map_err(|e| CliError::from(e.with_context("build image", image)))?;
+
+        if let Ok(nodes_out) = command_with_ctx(ctx, ved_core::r::bins::KUBECTL)
+            .args(["get", "nodes", "-o", "jsonpath={.items[*].metadata.name}"])
+            .capture()
+            .exec()
+        {
+            if let Some(stdout) = nodes_out.stdout {
+                for node in stdout.split_whitespace() {
+                    let has_ctr = command_with_ctx(ctx, ved_core::r::bins::DOCKER)
+                        .args(["exec", node, "which", "ctr"])
+                        .capture()
+                        .exec()
+                        .is_ok();
+                    if !has_ctr {
+                        continue;
+                    }
+                    let tmp_tar = std::env::temp_dir().join(format!(
+                        "ved-k8s-img-{}-{}.tar",
+                        std::process::id(),
+                        name
+                    ));
+                    let tmp_tar_str = tmp_tar.to_string_lossy().into_owned();
+                    let node_tar = format!("/tmp/ved-k8s-img-{}-{name}.tar", std::process::id());
+                    let saved = command_with_ctx(ctx, ved_core::r::bins::DOCKER)
+                        .args(["save", "-o", &tmp_tar_str, image])
+                        .capture()
+                        .exec()
+                        .is_ok();
+                    if saved {
+                        let copied = command_with_ctx(ctx, ved_core::r::bins::DOCKER)
+                            .args(["cp", &tmp_tar_str, &format!("{node}:{node_tar}")])
+                            .capture()
+                            .exec()
+                            .is_ok();
+                        if copied {
+                            let _ = command_with_ctx(ctx, ved_core::r::bins::DOCKER)
+                                .args([
+                                    "exec", node, "ctr", "-n", "k8s.io", "images", "import",
+                                    &node_tar,
+                                ])
+                                .capture()
+                                .exec();
+                            let _ = command_with_ctx(ctx, ved_core::r::bins::DOCKER)
+                                .args(["exec", node, "rm", "-f", &node_tar])
+                                .capture()
+                                .exec();
+                        }
+                    }
+                    let _ = std::fs::remove_file(&tmp_tar);
+                }
+            }
+        }
         Ok(())
     }
 }

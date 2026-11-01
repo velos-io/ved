@@ -76,6 +76,7 @@ ved {
             image = "curlimages/curl:8.6.0"
             hook = Hook.POST_INSTALL
             command("curl", "-f", "http://api-gateway:8080/smoke")
+            waitFor("api-gateway.ready")
         }
 
         job("cleanup-job") {

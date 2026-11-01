@@ -1074,7 +1074,7 @@ fn is_url(s: &str) -> bool {
         || s.starts_with("ssh://")
 }
 
-fn resolve_build_mapping(build_val: &str) -> Mapping {
+pub fn resolve_build_mapping(build_val: &str) -> Mapping {
     let trimmed = build_val.trim();
 
     if let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(trimmed) {

@@ -107,6 +107,12 @@ fn run_up_k8s_with_plan_and_output(
     let manifest_stream = build_namespace_manifests(&ns_refs);
     deployer.apply_manifest_stream(ctx, &manifest_stream)?;
 
+    for (name, svc) in &spec.services {
+        if svc.is_enabled(name) && svc.build.is_some() {
+            deployer.prepare_k8s_service_image(ctx, name, svc)?;
+        }
+    }
+
     for (job_name, job) in &spec.jobs {
         if job.schedule.is_some() {
             continue;

@@ -102,11 +102,37 @@ fn run_ps_k8s_with_plan_and_output(
         .resolve_ingress_suffix(spec_opt.and_then(|s| s.ingress.as_deref()));
     let ns_agent = spec_opt
         .and_then(|spec| {
-            let job = spec.jobs.get("smoke-test");
-            job.map(|j| {
-                plan.map(|p| p.namespace_for_job(j, "smoke-test"))
-                    .unwrap_or_else(|| slot.agent_namespace())
-            })
+            if let Some(job) = spec.jobs.get("smoke-test") {
+                return Some(
+                    plan.map(|p| p.namespace_for_job(job, "smoke-test"))
+                        .unwrap_or_else(|| slot.agent_namespace()),
+                );
+            }
+            let resolver = ctx.namespace_resolver(slot);
+            let default_agent_ns = slot.agent_namespace();
+            let has_agent_workload = spec.services.iter().any(|(name, svc)| {
+                svc.is_enabled(name)
+                    && plan
+                        .map(|p| p.namespace_for_service(svc, name))
+                        .unwrap_or_else(|| resolver.resolve_for_service(svc, name))
+                        == default_agent_ns
+            }) || spec.jobs.iter().any(|(name, job)| {
+                job.is_enabled(name)
+                    && plan
+                        .map(|p| p.namespace_for_job(job, name))
+                        .unwrap_or_else(|| resolver.resolve_for_job(job, name))
+                        == default_agent_ns
+            });
+            if has_agent_workload {
+                return Some(default_agent_ns);
+            }
+            spec.services
+                .iter()
+                .find(|(name, svc)| svc.is_enabled(name))
+                .map(|(name, svc)| {
+                    plan.map(|p| p.namespace_for_service(svc, name))
+                        .unwrap_or_else(|| resolver.resolve_for_service(svc, name))
+                })
         })
         .unwrap_or_else(|| slot.agent_namespace());
     output.println(&crate::ui::section(
@@ -227,5 +253,39 @@ mod tests {
 
         let actions = mock.recorded_actions();
         assert_eq!(actions, vec![DeployAction::ComposePs]);
+    }
+
+    #[test]
+    fn test_run_ps_k8s_selects_custom_group_namespace_when_agent_namespace_is_empty() {
+        let mock = MockDeployer::new();
+        let output = crate::output::BufferOutputter::default();
+        let ctx = WorkspaceContext::new(Path::new(".").to_path_buf()).unwrap();
+        let mut services = indexmap::IndexMap::new();
+        services.insert(
+            "web".to_string(),
+            ved_core::ServiceSpec {
+                image: Some("nginx:alpine".to_string()),
+                group: "core".to_string(),
+                ..Default::default()
+            },
+        );
+        let spec = AppSpec {
+            app: "custom-ps".to_string(),
+            version: "0.1.0".to_string(),
+            services,
+            ..Default::default()
+        };
+        let slot = Slot("1".to_string());
+        let plan = KubernetesRoutingPlan::build(&spec, ctx.namespace_resolver(&slot)).unwrap();
+
+        run_ps_k8s_with_plan_and_output(&mock, &ctx, Some(&spec), Some(&plan), &slot, &output)
+            .expect("run ps with custom group");
+
+        assert_eq!(
+            mock.recorded_actions(),
+            vec![DeployAction::K8sGetPods {
+                namespace: "core".to_string(),
+            }]
+        );
     }
 }

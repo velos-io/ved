@@ -57,18 +57,94 @@ fn env_from(name: &str, has_env: bool) -> YamlNode {
     YamlNode::sequence(refs)
 }
 
+#[cfg(test)]
 pub(super) fn format_mounts(mounts: &[MountSpec]) -> (Vec<YamlNode>, Vec<YamlNode>, Vec<YamlNode>) {
+    let root = if cfg!(windows) {
+        r"C:\explicit\nonexistent-workspace"
+    } else {
+        "/explicit/nonexistent-workspace"
+    };
+    let context = crate::workspace::WorkspaceContext::from_explicit_paths(
+        root,
+        std::path::Path::new(root).join("config"),
+        crate::config::ConfigSnapshot::from_values(BTreeMap::new()),
+    )
+    .expect("test workspace context");
+    format_mounts_with_context("workload", mounts, &context)
+}
+
+#[cfg(feature = "host")]
+fn resolve_workspace_mount_path(
+    host_path: &str,
+    context: &crate::workspace::WorkspaceContext,
+) -> Option<std::path::PathBuf> {
+    let raw = Path::new(host_path);
+    let candidate = if !raw.is_absolute() {
+        context.resolve(raw)
+    } else if context.root() != Path::new(".")
+        && (raw.starts_with(context.root()) || raw.starts_with(context.work_dir()))
+    {
+        raw.to_path_buf()
+    } else {
+        return None;
+    };
+
+    if candidate.exists() {
+        return Some(candidate);
+    }
+
+    let stacks_work_dir = context.work_dir().join("stacks");
+    if let Ok(rel) = candidate.strip_prefix(&stacks_work_dir) {
+        let fallback = crate::stacks::resolve_stacks_dir_with_context(context).join(rel);
+        if fallback.exists() {
+            return Some(fallback);
+        }
+    }
+    Some(candidate)
+}
+
+#[cfg(not(feature = "host"))]
+fn resolve_workspace_mount_path(
+    _host_path: &str,
+    _context: &crate::workspace::WorkspaceContext,
+) -> Option<std::path::PathBuf> {
+    None
+}
+
+fn read_directory_config_entries(dir: &Path) -> Option<Vec<(String, YamlNode)>> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut files = BTreeMap::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() {
+            if let (Some(file_name), Ok(content)) = (
+                path.file_name().and_then(|n| n.to_str()),
+                std::fs::read_to_string(&path),
+            ) {
+                files.insert(file_name.to_string(), YamlNode::scalar(content));
+            }
+        }
+    }
+    (!files.is_empty()).then(|| files.into_iter().collect())
+}
+
+pub(super) fn format_mounts_with_context(
+    workload_name: &str,
+    mounts: &[MountSpec],
+    context: &crate::workspace::WorkspaceContext,
+) -> (Vec<YamlNode>, Vec<YamlNode>, Vec<YamlNode>) {
     let mut attached = Vec::new();
     let mut volumes = Vec::new();
-    let mut claims = Vec::new();
+    let mut extra_docs = Vec::new();
     for mount in mounts {
+        let mut sub_path: Option<String> = None;
         let (name, path, read_only, source) = match &mount.kind {
             MountKind::PersistentVolumeClaim {
                 claim_name,
                 mount_path,
                 read_only,
             } => {
-                claims.push(
+                extra_docs.push(
                     ManifestDocBuilder::new("v1", "PersistentVolumeClaim", claim_name)
                         .with_field(
                             "spec",
@@ -86,9 +162,9 @@ pub(super) fn format_mounts(mounts: &[MountSpec]) -> (Vec<YamlNode>, Vec<YamlNod
                         .to_node(),
                 );
                 (
-                    claim_name,
-                    mount_path,
-                    read_only,
+                    claim_name.as_str(),
+                    mount_path.as_str(),
+                    *read_only,
                     (
                         "persistentVolumeClaim",
                         map(vec![("claimName", YamlNode::scalar(claim_name))]),
@@ -101,35 +177,148 @@ pub(super) fn format_mounts(mounts: &[MountSpec]) -> (Vec<YamlNode>, Vec<YamlNod
                 mount_path,
                 read_only,
             } => {
-                let source = if host_path.starts_with('/') {
-                    ("hostPath", map(vec![("path", YamlNode::scalar(host_path))]))
-                } else {
-                    ("emptyDir", YamlNode::EmptyMapping)
-                };
-                (volume_name, mount_path, read_only, source)
+                let source =
+                    if let Some(resolved) = resolve_workspace_mount_path(host_path, context) {
+                        if resolved.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&resolved) {
+                                let file_key = Path::new(mount_path)
+                                    .file_name()
+                                    .or_else(|| resolved.file_name())
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("content");
+                                let cm_name = crate::model::sanitize_volume_name(&format!(
+                                    "{workload_name}-{volume_name}"
+                                ));
+                                let data = vec![(file_key.to_string(), YamlNode::scalar(content))];
+                                extra_docs.push(
+                                    ManifestDocBuilder::new("v1", "ConfigMap", &cm_name)
+                                        .with_field("data", YamlNode::Mapping(data))
+                                        .to_node(),
+                                );
+                                sub_path = Some(file_key.to_string());
+                                ("configMap", map(vec![("name", YamlNode::scalar(cm_name))]))
+                            } else {
+                                ("emptyDir", YamlNode::EmptyMapping)
+                            }
+                        } else if resolved.is_dir() {
+                            if let Some(data) = read_directory_config_entries(&resolved) {
+                                let cm_name = crate::model::sanitize_volume_name(&format!(
+                                    "{workload_name}-{volume_name}"
+                                ));
+                                extra_docs.push(
+                                    ManifestDocBuilder::new("v1", "ConfigMap", &cm_name)
+                                        .with_field("data", YamlNode::Mapping(data))
+                                        .to_node(),
+                                );
+                                ("configMap", map(vec![("name", YamlNode::scalar(cm_name))]))
+                            } else {
+                                ("emptyDir", YamlNode::EmptyMapping)
+                            }
+                        } else {
+                            ("emptyDir", YamlNode::EmptyMapping)
+                        }
+                    } else if host_path.starts_with('/') {
+                        ("hostPath", map(vec![("path", YamlNode::scalar(host_path))]))
+                    } else {
+                        ("emptyDir", YamlNode::EmptyMapping)
+                    };
+                (
+                    volume_name.as_str(),
+                    mount_path.as_str(),
+                    *read_only,
+                    source,
+                )
             }
             MountKind::ConfigMap {
                 config_map_name,
                 mount_path,
                 read_only,
             } => (
-                config_map_name,
-                mount_path,
-                read_only,
+                config_map_name.as_str(),
+                mount_path.as_str(),
+                *read_only,
                 (
                     "configMap",
                     map(vec![("name", YamlNode::scalar(config_map_name))]),
                 ),
             ),
         };
-        attached.push(map(vec![
+        let mut mount_entries = vec![
             ("name", YamlNode::scalar(name)),
             ("mountPath", YamlNode::scalar(path)),
-            ("readOnly", YamlNode::boolean(*read_only)),
-        ]));
+            ("readOnly", YamlNode::boolean(read_only)),
+        ];
+        if let Some(sub) = sub_path {
+            mount_entries.push(("subPath", YamlNode::scalar(sub)));
+        }
+        attached.push(map(mount_entries));
         volumes.push(map(vec![("name", YamlNode::scalar(name)), source]));
     }
-    (attached, volumes, claims)
+    (attached, volumes, extra_docs)
+}
+
+fn build_dependency_checks(
+    caller_name: &str,
+    caller_group: &str,
+    typed: &crate::validated::ValidatedWorkload,
+    validated: &crate::validated::ValidatedSpec,
+) -> Vec<String> {
+    use crate::validated::DependencyCondition;
+    let spec = validated.as_spec();
+    let caller_resolved_group = resolve_group(caller_group, caller_name);
+    let mut checks = Vec::new();
+    for dep in typed.dependencies() {
+        let dep_name = dep.target();
+        if spec.jobs.contains_key(dep_name) || dep.condition() == DependencyCondition::Success {
+            continue;
+        }
+        if let Some(target) = spec.services.get(dep_name) {
+            if !target.is_enabled(dep_name) {
+                continue;
+            }
+            let target_group = resolve_group(&target.group, dep_name);
+            let host = if target_group != caller_resolved_group {
+                format!("{dep_name}.{target_group}.svc.cluster.local")
+            } else {
+                dep_name.into()
+            };
+            let port = match dep.condition() {
+                DependencyCondition::Tcp(port) => port,
+                _ => target.port.unwrap_or_else(|| {
+                    validated
+                        .workload(None, dep_name)
+                        .expect("validated dependency")
+                        .ports()
+                        .first()
+                        .map(|p| p.container())
+                        .unwrap_or(8080)
+                }),
+            };
+            checks.push(format!("until nc -z {host} {port}; do sleep 2; done"));
+        } else if dep.external() {
+            if let DependencyCondition::Tcp(port) = dep.condition() {
+                checks.push(format!("until nc -z {dep_name} {port}; do sleep 2; done"));
+            }
+        }
+    }
+    checks
+}
+
+fn push_wait_for_init_container(pod: &mut Vec<(&'static str, YamlNode)>, checks: &[String]) {
+    if !checks.is_empty() {
+        pod.push((
+            "initContainers",
+            YamlNode::sequence(vec![map(vec![
+                ("name", YamlNode::scalar("wait-for-deps")),
+                ("image", YamlNode::scalar("busybox:1.36")),
+                ("imagePullPolicy", YamlNode::scalar("IfNotPresent")),
+                (
+                    "command",
+                    strings(vec!["sh".into(), "-c".into(), checks.join(" && ")]),
+                ),
+            ])]),
+        ));
+    }
 }
 
 pub(super) fn build_service_manifest(
@@ -137,6 +326,7 @@ pub(super) fn build_service_manifest(
     svc: &ServiceSpec,
     ingress_suffix: &str,
     validated: &crate::validated::ValidatedSpec,
+    context: &crate::workspace::WorkspaceContext,
 ) -> Result<String> {
     let spec = validated.as_spec();
     let typed = validated.workload(None, name).expect("validated service");
@@ -144,7 +334,7 @@ pub(super) fn build_service_manifest(
     if !svc.env.is_empty() {
         docs.push(env_document(name, &svc.group, &svc.env, spec));
     }
-    let (mounts, volumes, claims) = format_mounts(typed.mounts());
+    let (mounts, volumes, extra_docs) = format_mounts_with_context(name, typed.mounts(), context);
     let ports: Vec<_> = typed
         .ports()
         .iter()
@@ -161,7 +351,7 @@ pub(super) fn build_service_manifest(
         ("imagePullPolicy", YamlNode::scalar("IfNotPresent")),
         ("envFrom", env_from(name, !svc.env.is_empty())),
     ];
-    push_container_command_and_args(&mut container, typed);
+    push_container_command_and_args(&mut container, typed, image);
     if !ports.is_empty() {
         container.push((
             "ports",
@@ -222,56 +412,8 @@ pub(super) fn build_service_manifest(
         ));
     }
     let mut pod = Vec::new();
-    let mut checks = Vec::new();
-    for dep in typed.dependencies() {
-        use crate::validated::DependencyCondition;
-        let dep_name = dep.target();
-        if spec.jobs.contains_key(dep_name) || dep.condition() == DependencyCondition::Success {
-            continue;
-        }
-        if let Some(target) = spec.services.get(dep_name) {
-            if !target.is_enabled(dep_name) {
-                continue;
-            }
-            let target_group = resolve_group(&target.group, dep_name);
-            let host = if target_group != resolve_group(&svc.group, name) {
-                format!("{dep_name}.{target_group}.svc.cluster.local")
-            } else {
-                dep_name.into()
-            };
-            let port = match dep.condition() {
-                DependencyCondition::Tcp(port) => port,
-                _ => target.port.unwrap_or_else(|| {
-                    validated
-                        .workload(None, dep_name)
-                        .expect("validated dependency")
-                        .ports()
-                        .first()
-                        .map(|p| p.container())
-                        .unwrap_or(8080)
-                }),
-            };
-            checks.push(format!("until nc -z {host} {port}; do sleep 2; done"));
-        } else if dep.external() {
-            if let DependencyCondition::Tcp(port) = dep.condition() {
-                checks.push(format!("until nc -z {dep_name} {port}; do sleep 2; done"));
-            }
-        }
-    }
-    if !checks.is_empty() {
-        pod.push((
-            "initContainers",
-            YamlNode::sequence(vec![map(vec![
-                ("name", YamlNode::scalar("wait-for-deps")),
-                ("image", YamlNode::scalar("busybox:1.36")),
-                ("imagePullPolicy", YamlNode::scalar("IfNotPresent")),
-                (
-                    "command",
-                    strings(vec!["sh".into(), "-c".into(), checks.join(" && ")]),
-                ),
-            ])]),
-        ));
-    }
+    let checks = build_dependency_checks(name, &svc.group, typed, validated);
+    push_wait_for_init_container(&mut pod, &checks);
     if let Some(sec) = &svc.security {
         let mut ctx = Vec::new();
         let mut caps = Vec::new();
@@ -397,7 +539,7 @@ pub(super) fn build_service_manifest(
                 .to_node(),
         );
     }
-    docs.extend(claims);
+    docs.extend(extra_docs);
     render_docs(&docs)
 }
 
@@ -405,6 +547,7 @@ pub(super) fn build_job_manifest(
     name: &str,
     job: &JobSpec,
     validated: &crate::validated::ValidatedSpec,
+    context: &crate::workspace::WorkspaceContext,
 ) -> Result<String> {
     let spec = validated.as_spec();
     let typed = validated.workload(None, name).expect("validated job");
@@ -412,35 +555,34 @@ pub(super) fn build_job_manifest(
     if !job.env.is_empty() {
         docs.push(env_document(name, &job.group, &job.env, spec));
     }
-    let (mounts, volumes, _) = format_mounts(typed.mounts());
+    let (mounts, volumes, extra_docs) = format_mounts_with_context(name, typed.mounts(), context);
+    let job_image = if job.image.is_empty() {
+        "busybox:1.36"
+    } else {
+        &job.image
+    };
     let mut container = vec![
         ("name", YamlNode::scalar(name)),
-        (
-            "image",
-            YamlNode::scalar(if job.image.is_empty() {
-                "busybox:1.36"
-            } else {
-                &job.image
-            }),
-        ),
+        ("image", YamlNode::scalar(job_image)),
         ("imagePullPolicy", YamlNode::scalar("IfNotPresent")),
     ];
-    push_container_command_and_args(&mut container, typed);
+    push_container_command_and_args(&mut container, typed, job_image);
     container.push(("envFrom", env_from(name, !job.env.is_empty())));
     if !mounts.is_empty() {
         container.push(("volumeMounts", YamlNode::sequence(mounts)));
     }
-    let mut pod = vec![
-        (
-            "restartPolicy",
-            YamlNode::scalar(if job.schedule.is_some() {
-                "OnFailure"
-            } else {
-                "Never"
-            }),
-        ),
-        ("containers", YamlNode::sequence(vec![map(container)])),
-    ];
+    let mut pod = Vec::new();
+    let checks = build_dependency_checks(name, &job.group, typed, validated);
+    push_wait_for_init_container(&mut pod, &checks);
+    pod.push((
+        "restartPolicy",
+        YamlNode::scalar(if job.schedule.is_some() {
+            "OnFailure"
+        } else {
+            "Never"
+        }),
+    ));
+    pod.push(("containers", YamlNode::sequence(vec![map(container)])));
     if !volumes.is_empty() {
         pod.push(("volumes", YamlNode::sequence(volumes)));
     }
@@ -481,12 +623,14 @@ pub(super) fn build_job_manifest(
             .to_node()
     };
     docs.push(doc);
+    docs.extend(extra_docs);
     render_docs(&docs)
 }
 
 fn push_container_command_and_args(
     container: &mut Vec<(&'static str, YamlNode)>,
     typed: &crate::validated::ValidatedWorkload,
+    image: &str,
 ) {
     if let Some(entrypoint) = typed.entrypoint() {
         let entrypoint_args = entrypoint.to_args();
@@ -512,7 +656,14 @@ fn push_container_command_and_args(
     } else if let Some(command) = typed.command() {
         let (field, args) = match command {
             crate::model::CommandSpec::List(args) => {
-                let field = if args.first().is_some_and(|first| first.starts_with('-')) {
+                let is_flag = args.first().is_some_and(|first| first.starts_with('-'));
+                let is_flyway_subcmd = image.contains("flyway")
+                    && args.len() == 1
+                    && matches!(
+                        args[0].as_str(),
+                        "migrate" | "clean" | "info" | "validate" | "undo" | "baseline" | "repair"
+                    );
+                let field = if is_flag || is_flyway_subcmd {
                     "args"
                 } else {
                     "command"
