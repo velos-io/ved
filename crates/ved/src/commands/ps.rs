@@ -89,7 +89,7 @@ pub(crate) fn run_ps_k8s_with_plan(
     run_ps_k8s_with_plan_and_output(deployer, ctx, spec_opt, plan, slot, &TerminalOutputter)
 }
 
-fn run_ps_k8s_with_plan_and_output(
+pub(crate) fn run_ps_k8s_with_plan_and_output(
     deployer: &dyn Deployer,
     ctx: &WorkspaceContext,
     spec_opt: Option<&AppSpec>,
@@ -183,7 +183,7 @@ pub(crate) fn run_ps_compose_with_ctx(
     run_ps_compose_with_output(deployer, ctx, spec_opt, &TerminalOutputter)
 }
 
-fn run_ps_compose_with_output(
+pub(crate) fn run_ps_compose_with_output(
     deployer: &dyn Deployer,
     ctx: &WorkspaceContext,
     spec_opt: Option<&AppSpec>,

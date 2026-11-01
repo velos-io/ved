@@ -67,7 +67,7 @@ pub(crate) fn run_test_k8s_with(
     run_test_k8s_with_ctx(deployer, &ctx, target_workload, slot)
 }
 
-fn run_test_k8s_with_plan_and_output(
+pub(crate) fn run_test_k8s_with_plan_and_output(
     deployer: &(impl Deployer + ?Sized),
     ctx: &WorkspaceContext,
     target_workload: &str,
@@ -147,7 +147,7 @@ pub(crate) fn run_test_compose_with_ctx(
     run_test_compose_with_output(deployer, ctx, target_workload, &TerminalOutputter)
 }
 
-fn run_test_compose_with_output(
+pub(crate) fn run_test_compose_with_output(
     deployer: &(impl Deployer + ?Sized),
     ctx: &WorkspaceContext,
     target_workload: &str,

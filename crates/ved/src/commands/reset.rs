@@ -57,19 +57,37 @@ pub(crate) fn run_reset_k8s_with_ctx(
 pub(crate) fn run_reset_k8s_with_output(
     ctx: &WorkspaceContext,
     slot: &Slot,
-    deployer: &impl Deployer,
+    deployer: &(impl Deployer + ?Sized),
+    output: &dyn Outputter,
+) -> Result<()> {
+    run_reset_k8s_with_plan_and_output(ctx, slot, None, deployer, output)
+}
+
+pub(crate) fn run_reset_k8s_with_plan_and_output(
+    ctx: &WorkspaceContext,
+    slot: &Slot,
+    plan: Option<&ved_core::KubernetesRoutingPlan>,
+    deployer: &(impl Deployer + ?Sized),
     output: &dyn Outputter,
 ) -> Result<()> {
     let resolver = ctx.namespace_resolver(slot);
     let mut namespaces = resolver.known_namespaces();
-    let spec_path = ctx.spec_path(None);
-    if spec_path.exists() {
-        if let Ok(loaded) =
-            ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())
-        {
-            for ns in resolver.all_namespaces(&loaded.spec) {
-                if !namespaces.contains(&ns) {
-                    namespaces.push(ns);
+    if let Some(plan) = plan {
+        for ns in plan.namespaces() {
+            if !namespaces.contains(&ns) {
+                namespaces.push(ns);
+            }
+        }
+    } else {
+        let spec_path = ctx.spec_path(None);
+        if spec_path.exists() {
+            if let Ok(loaded) =
+                ved_core::load_any_spec_with_context_and_dependencies(&spec_path, ctx.core())
+            {
+                for ns in resolver.all_namespaces(&loaded.spec) {
+                    if !namespaces.contains(&ns) {
+                        namespaces.push(ns);
+                    }
                 }
             }
         }
@@ -100,7 +118,7 @@ pub(crate) fn run_reset_compose_with_ctx(
 
 pub(crate) fn run_reset_compose_with_output(
     ctx: &WorkspaceContext,
-    deployer: &impl Deployer,
+    deployer: &(impl Deployer + ?Sized),
     output: &dyn Outputter,
 ) -> Result<()> {
     output.println("reset: removing all compose resources (volumes + images)");

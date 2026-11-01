@@ -75,6 +75,7 @@ fn run_with_cwd(
 
     let needs = match &cli.command {
         cli::Commands::Up(_)
+        | cli::Commands::Verify(_)
         | cli::Commands::Sync(_)
         | cli::Commands::Build(_)
         | cli::Commands::Init(_)

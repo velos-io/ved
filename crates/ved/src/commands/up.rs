@@ -9,13 +9,12 @@ use crate::orchestrator::{Deployer, HostDeployer};
 use crate::output::{CoreOutputAdapter, Outputter, TerminalOutputter};
 use crate::spec::resolve_target_with_ctx;
 
-pub(crate) fn handle_up_with_output(
-    deployer: &dyn Deployer,
+pub(crate) fn run_auto_build_if_enabled(
     ctx: &WorkspaceContext,
-    args: UpArgs,
+    force_build: bool,
     output: &dyn Outputter,
 ) -> Result<()> {
-    if args.build
+    if force_build
         || ctx
             .config()
             .get_prop(ved_core::r::keys::VED_AUTO_BUILD, "false")
@@ -27,28 +26,35 @@ pub(crate) fn handle_up_with_output(
             .cancellation_token(ctx.cancellation_token());
         ved_core::build::build_workspace(ctx.core(), ctx.root(), &build_options, &core_output)?;
     }
+    Ok(())
+}
+
+pub(crate) fn handle_up_with_output(
+    deployer: &dyn Deployer,
+    ctx: &WorkspaceContext,
+    args: UpArgs,
+    output: &dyn Outputter,
+) -> Result<()> {
+    run_auto_build_if_enabled(ctx, args.build, output)?;
     let tgt = resolve_target_with_ctx(ctx, args.target)?;
     let slot = ctx.resolve_slot(args.slot);
-    let (spec, plan) = if tgt == DeployTarget::Kubernetes {
-        let (spec, plan) =
-            crate::assets::ensure_k8s_assets_with_plan_and_output(ctx, args.file, &slot, output)?;
-        (spec, Some(plan))
-    } else {
-        (
-            crate::assets::ensure_assets_with_output(ctx, args.file, tgt.clone(), output)?,
-            None,
-        )
-    };
 
     match tgt {
-        DeployTarget::Kubernetes => run_up_k8s_with_plan_and_output(
-            deployer,
-            ctx,
-            &spec,
-            plan.as_ref().expect("k8s plan"),
-            output,
-        ),
-        DeployTarget::Compose => run_up_compose_with_output(deployer, ctx, &spec, output),
+        DeployTarget::Kubernetes => {
+            let (spec, plan) = crate::assets::ensure_k8s_assets_with_plan_and_output(
+                ctx, args.file, &slot, output,
+            )?;
+            run_up_k8s_with_plan_and_output(deployer, ctx, &spec, &plan, output)
+        }
+        DeployTarget::Compose => {
+            let spec = crate::assets::ensure_assets_with_output(
+                ctx,
+                args.file,
+                DeployTarget::Compose,
+                output,
+            )?;
+            run_up_compose_with_output(deployer, ctx, &spec, output)
+        }
     }
 }
 
@@ -89,7 +95,7 @@ pub(crate) fn run_up_k8s_with_plan(
     run_up_k8s_with_plan_and_output(deployer, ctx, spec, plan, &TerminalOutputter)
 }
 
-fn run_up_k8s_with_plan_and_output(
+pub(crate) fn run_up_k8s_with_plan_and_output(
     deployer: &dyn Deployer,
     ctx: &WorkspaceContext,
     spec: &AppSpec,
@@ -178,7 +184,7 @@ pub(crate) fn run_up_compose_with_ctx(
     run_up_compose_with_output(deployer, ctx, spec, &TerminalOutputter)
 }
 
-fn run_up_compose_with_output(
+pub(crate) fn run_up_compose_with_output(
     deployer: &dyn Deployer,
     ctx: &WorkspaceContext,
     spec: &AppSpec,

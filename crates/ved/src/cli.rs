@@ -242,6 +242,29 @@ pub(crate) struct TestArgs {
 }
 
 #[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct VerifyArgs {
+    /// Optional test workload (runs default job or skips if no jobs exist)
+    #[arg(value_name = "WORKLOAD")]
+    pub(crate) workload: Option<String>,
+
+    /// Path to the specification file (e.g. Vedfile or ved.yaml)
+    #[arg(short = 'f', long)]
+    pub(crate) file: Option<PathBuf>,
+
+    /// Deployment target: compose or k8s
+    #[arg(short = 't', long)]
+    pub(crate) target: Option<DeployTarget>,
+
+    /// Kubernetes slot index (default: K8S_APP_SLOT or 1)
+    #[arg(short = 's', long)]
+    pub(crate) slot: Option<Slot>,
+
+    /// Run toolchain builds for detected modules before starting stack
+    #[arg(long)]
+    pub(crate) build: bool,
+}
+
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ValidateArgs {
     /// Path to the specification file
     #[arg(short = 'f', long)]
@@ -313,6 +336,8 @@ pub(crate) enum Commands {
     /// Run test workload against active stack
     #[command(alias = "smoke-test")]
     Test(TestArgs),
+    /// Run full verification lifecycle (reset -> up -> ps -> test)
+    Verify(VerifyArgs),
     /// Validate a Ved specification against schema
     Validate(ValidateArgs),
     /// Initialize a project with the ved wrapper (vew) and configuration
@@ -430,6 +455,27 @@ mod tests {
                 assert_eq!(args.workload, None);
             }
             _ => panic!("expected Commands::Test"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "ved",
+            "verify",
+            "smoke-test",
+            "-t",
+            "k8s",
+            "-s",
+            "4",
+            "--build",
+        ])
+        .expect("parse verify");
+        match cli.command {
+            Commands::Verify(args) => {
+                assert_eq!(args.workload.as_deref(), Some("smoke-test"));
+                assert_eq!(args.target, Some(DeployTarget::Kubernetes));
+                assert_eq!(args.slot, Some(Slot("4".to_string())));
+                assert!(args.build);
+            }
+            _ => panic!("expected Commands::Verify"),
         }
 
         let cli = Cli::try_parse_from(["ved", "up", "-t", "k8s", "-s", "2", "--build"])

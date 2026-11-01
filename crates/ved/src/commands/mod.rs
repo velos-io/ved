@@ -14,6 +14,7 @@ pub(crate) mod sync;
 pub(crate) mod test;
 pub(crate) mod up;
 pub(crate) mod validate;
+pub(crate) mod verify;
 pub(crate) mod version;
 
 pub(crate) fn dispatch_with_output(
@@ -37,6 +38,9 @@ pub(crate) fn dispatch_with_output(
         }
         Commands::Test(args) => {
             test::handle_test_with_output(ctx, args, &crate::orchestrator::HostDeployer, output)
+        }
+        Commands::Verify(args) => {
+            verify::handle_verify_with_output(&crate::orchestrator::HostDeployer, ctx, args, output)
         }
         Commands::Validate(args) => validate::handle_validate(ctx, args, output),
         Commands::Init(args) => init::handle_init(ctx, args, output),
