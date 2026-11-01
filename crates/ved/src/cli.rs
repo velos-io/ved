@@ -531,7 +531,8 @@ mod tests {
             _ => panic!("expected Commands::Build"),
         }
 
-        let cli = Cli::try_parse_from(["ved", "plugin", "install", "kit"]).expect("parse plugin install");
+        let cli =
+            Cli::try_parse_from(["ved", "plugin", "install", "kit"]).expect("parse plugin install");
         match cli.command {
             Commands::Plugin(args) => match args.action {
                 PluginAction::Install { name, path } => {
