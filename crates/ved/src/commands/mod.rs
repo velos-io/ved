@@ -8,6 +8,7 @@ pub(crate) mod config;
 pub(crate) mod deinit;
 pub(crate) mod down;
 pub(crate) mod init;
+pub(crate) mod plugin;
 pub(crate) mod ps;
 pub(crate) mod reset;
 pub(crate) mod sync;
@@ -48,6 +49,8 @@ pub(crate) fn dispatch_with_output(
         Commands::Config(args) => config::handle_config(ctx, args, output),
         Commands::Sync(args) => sync::handle_sync(ctx, args, output),
         Commands::Build(args) => build::handle_build(ctx, args, output),
+        Commands::Plugin(args) => plugin::handle_plugin(args.action, output),
         Commands::Version => version::handle_version(output),
+        Commands::External(args) => plugin::handle_external(args, ctx, output),
     }
 }

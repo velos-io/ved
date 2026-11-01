@@ -87,6 +87,8 @@ fn run_with_cwd(
         | cli::Commands::Test(_)
         | cli::Commands::Validate(_)
         | cli::Commands::Reset(_)
+        | cli::Commands::Plugin(_)
+        | cli::Commands::External(_)
         | cli::Commands::Deinit(_) => DirNeeds::Read,
 
         cli::Commands::Version => DirNeeds::None,

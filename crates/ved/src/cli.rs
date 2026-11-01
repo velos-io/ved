@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use std::ffi::OsString;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -321,6 +322,32 @@ pub(crate) struct BuildArgs {
     pub(crate) concurrency: Option<usize>,
 }
 
+#[derive(Args, Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PluginArgs {
+    #[command(subcommand)]
+    pub(crate) action: PluginAction,
+}
+
+#[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PluginAction {
+    /// Install a plugin by name or repo (e.g. kit, mirror, or owner/repo)
+    Install {
+        /// Plugin name or repository identifier
+        name: String,
+
+        /// Path to local executable to link as a plugin
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    /// List installed plugins and available commands
+    List,
+    /// Remove an installed plugin
+    Remove {
+        /// Plugin name to remove
+        name: String,
+    },
+}
+
 #[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Commands {
     /// Compile a Ved specification into target deployment manifests
@@ -350,8 +377,13 @@ pub(crate) enum Commands {
     Sync(SyncArgs),
     /// Build project modules using detected toolchains
     Build(BuildArgs),
+    /// Manage Ved plugins
+    Plugin(PluginArgs),
     /// Display compiler version
     Version,
+    /// External subcommand plugin dispatch
+    #[command(external_subcommand)]
+    External(Vec<OsString>),
 }
 
 #[derive(Subcommand, Clone, Debug, PartialEq, Eq)]
@@ -497,6 +529,35 @@ mod tests {
                 assert_eq!(args.concurrency, Some(8));
             }
             _ => panic!("expected Commands::Build"),
+        }
+
+        let cli = Cli::try_parse_from(["ved", "plugin", "install", "kit"]).expect("parse plugin install");
+        match cli.command {
+            Commands::Plugin(args) => match args.action {
+                PluginAction::Install { name, path } => {
+                    assert_eq!(name, "kit");
+                    assert_eq!(path, None);
+                }
+                _ => panic!("expected PluginAction::Install"),
+            },
+            _ => panic!("expected Commands::Plugin"),
+        }
+
+        let cli = Cli::try_parse_from(["ved", "plugin", "list"]).expect("parse plugin list");
+        match cli.command {
+            Commands::Plugin(args) => match args.action {
+                PluginAction::List => {}
+                _ => panic!("expected PluginAction::List"),
+            },
+            _ => panic!("expected Commands::Plugin"),
+        }
+
+        let cli = Cli::try_parse_from(["ved", "pki", "ca"]).expect("parse external subcommand");
+        match cli.command {
+            Commands::External(args) => {
+                assert_eq!(args, vec![OsString::from("pki"), OsString::from("ca")]);
+            }
+            _ => panic!("expected Commands::External"),
         }
 
         let cli = Cli::try_parse_from([

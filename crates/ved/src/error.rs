@@ -52,6 +52,9 @@ pub enum CliError {
         source: Box<CliError>,
     },
 
+    #[error("{0}")]
+    Message(String),
+
     #[error("operations failed ({failures_len}) after completing [{completed_summary}]: {}", format_failures(.failures), failures_len = failures.len(), completed_summary = completed.join(", "))]
     Aggregate {
         completed: Vec<String>,
@@ -211,6 +214,7 @@ impl CliError {
             CliError::ConfigDirNotFound(_)
             | CliError::DirNotWritable { .. }
             | CliError::Io(_)
+            | CliError::Message(_)
             | CliError::Process(_) => 1,
         }
     }
